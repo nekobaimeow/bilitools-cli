@@ -607,4 +607,53 @@ mod tests {
             assert!(params.contains_key(k), "missing key: {k}");
         }
     }
+
+    #[test]
+    fn classify_kind_from_arcurl_video() {
+        // Regular /video/BVxxx URL → "video", no ssid.
+        let r = VideoResult {
+            bvid: Some("BV1abc".into()),
+            ssid: None,
+            kind: "video",
+            title: String::new(),
+            author: String::new(),
+            mid: 0,
+            duration: String::new(),
+            duration_sec: 0,
+            play: 0,
+            pubdate: 0,
+            description: String::new(),
+            pic: String::new(),
+            typename: String::new(),
+            tid: None,
+            arcurl: "https://www.bilibili.com/video/BV1abc".into(),
+        };
+        assert_eq!(r.kind, "video");
+        assert_eq!(r.ssid, None);
+    }
+
+    #[test]
+    fn classify_kind_from_arcurl_cheese() {
+        // /cheese/play/ss{N} URL → "cheese", ssid == "N".
+        let r = VideoResult {
+            bvid: None,
+            ssid: Some("959815180".into()),
+            kind: "cheese",
+            title: String::new(),
+            author: String::new(),
+            mid: 0,
+            duration: String::new(),
+            duration_sec: 0,
+            play: 0,
+            pubdate: 0,
+            description: String::new(),
+            pic: String::new(),
+            typename: String::new(),
+            tid: None,
+            arcurl:
+                "https://www.bilibili.com/cheese/play/ss959815180?query_from=0".into(),
+        };
+        assert_eq!(r.kind, "cheese");
+        assert_eq!(r.ssid.as_deref(), Some("959815180"));
+    }
 }
