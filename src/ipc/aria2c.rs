@@ -405,6 +405,15 @@ pub async fn purge() -> Result<(), CliError> {
 ///
 /// The `Referer: https://www.bilibili.com/` and a recent Chrome UA
 /// are also added because B 站's CDN rejects requests without them.
+///
+/// # Resume caveat
+///
+/// aria2c's `--continue=true` requires a `.aria2` control file with
+/// the expected size of the partial download. If the file exists
+/// but the control file is missing, aria2c aborts with error 13 to
+/// avoid truncating it. The CLI mitigates this by removing the
+/// control file + ensuring the partial file still has the expected
+/// size before re-queuing; see `queue.rs` for the cleanup logic.
 pub async fn add_uri_resumable(
     uris: &[String],
     out: &str,

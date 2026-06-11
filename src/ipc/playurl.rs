@@ -78,35 +78,272 @@ impl QualityOption {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DashManifest {
+    #[serde(default)]
     pub duration: i64,
+    #[serde(default)]
     pub min_buffer_time: f64,
+    #[serde(default)]
     pub video: Vec<DashStream>,
+    #[serde(default)]
     pub audio: Vec<DashStream>,
+    #[serde(default)]
     pub dolby: Option<DashStream>,
+    #[serde(default)]
     pub flac: Option<DashStream>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct DashStream {
+    #[serde(default)]
     pub id: i64,
+    #[serde(default)]
     pub base_url: String,
+    #[serde(default)]
     pub backup_url: Option<Vec<String>>,
+    #[serde(default)]
     pub bandwidth: i64,
+    #[serde(default)]
     pub mime_type: String,
+    #[serde(default)]
     pub codecs: String,
+    #[serde(default)]
     pub width: Option<i64>,
+    #[serde(default)]
     pub height: Option<i64>,
+    #[serde(default)]
     pub frame_rate: Option<String>,
+    #[serde(default)]
     pub sar: Option<String>,
+    #[serde(default)]
     pub start_with_sap: Option<i64>,
-    pub segment_base: Option<DashSegmentBase>,
+    #[serde(default)]
+    pub segment_base: Option<serde_json::Value>,
+    #[serde(default)]
     pub codecid: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for DashStream {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Deserialize the entire stream as a `serde_json::Value` (an
+        // object) and pick whichever of the candidate names is
+        // present. This is the only way to handle B 站 returning the
+        // same logical field under both `baseUrl` and `base_url`
+        // — sometimes both at once — without serde complaining about
+        // duplicate fields.
+        let v = serde_json::Value::deserialize(deserializer)?;
+        let obj = match &v {
+            serde_json::Value::Object(m) => m,
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "DashStream: expected a JSON object",
+                ));
+            }
+        };
+
+        fn pick_string(v: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> String {
+            for k in keys {
+                if let Some(s) = v.get(*k).and_then(|x| x.as_str()) {
+                    return s.to_string();
+                }
+            }
+            String::new()
+        }
+        fn pick_opt_string(v: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<String> {
+            for k in keys {
+                if let Some(s) = v.get(*k).and_then(|x| x.as_str()) {
+                    return Some(s.to_string());
+                }
+            }
+            None
+        }
+        fn pick_i64(v: &serde_json::Map<String, serde_json::Value>, keys: &[&str], default: i64) -> i64 {
+            for k in keys {
+                if let Some(n) = v.get(*k).and_then(|x| x.as_i64()) {
+                    return n;
+                }
+            }
+            default
+        }
+        fn pick_opt_i64(v: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<i64> {
+            for k in keys {
+                if let Some(n) = v.get(*k).and_then(|x| x.as_i64()) {
+                    return Some(n);
+                }
+            }
+            None
+        }
+        fn pick_string_array(v: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<Vec<String>> {
+            for k in keys {
+                if let Some(arr) = v.get(*k).and_then(|x| x.as_array()) {
+                    let out: Vec<String> = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect();
+                    return Some(out);
+                }
+            }
+            None
+        }
+        fn pick_segbase(v: &serde_json::Map<String, serde_json::Value>) -> Option<serde_json::Value> {
+            for k in &["SegmentBase", "segment_base"] {
+                if let Some(s) = v.get(*k) {
+                    return Some(s.clone());
+                }
+            }
+            None
+        }
+
+        Ok(DashStream {
+            id: pick_i64(obj, &["id"], 0),
+            base_url: pick_string(obj, &["base_url", "baseUrl"]),
+            backup_url: pick_string_array(obj, &["backup_url", "backupUrl"]),
+            bandwidth: pick_i64(obj, &["bandwidth"], 0),
+            mime_type: pick_string(obj, &["mime_type", "mimeType"]),
+            codecs: pick_string(obj, &["codecs"]),
+            width: pick_opt_i64(obj, &["width"]),
+            height: pick_opt_i64(obj, &["height"]),
+            frame_rate: pick_opt_string(obj, &["frame_rate", "frameRate"]),
+            sar: pick_opt_string(obj, &["sar"]),
+            start_with_sap: pick_opt_i64(obj, &["start_with_sap", "startWithSap"]),
+            segment_base: pick_segbase(obj),
+            codecid: pick_i64(obj, &["codecid"], 0),
+        })
+    }
+}
+
+// =====================  Dual-name field deserializers  =====================
+//
+// B 站's playurl API returns the same logical field under both
+// camelCase and snake_case names — and sometimes both at once.
+// `#[serde(alias = "X")]` fails on duplicates because serde sees the
+// same target struct field being assigned twice. The fix is to
+// install a `MapVisitor` that consumes all map keys (without
+// complaining about unrecognized ones) and then we look up whichever
+// of the candidate names we want.
+
+use serde::de::{Deserializer, MapAccess, Visitor};
+use std::fmt;
+
+struct PickFirstOf<'a>(&'a [&'a str]);
+
+impl<'de, 'a> Visitor<'de> for PickFirstOf<'a> {
+    type Value = serde_json::Value;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a JSON object with at least one of {:?}", self.0)
+    }
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        // Walk every key, store the first matching value in `Value::Object`
+        // so the upstream caller can pick whichever key they want.
+        let mut map = serde_json::Map::new();
+        while let Some((key, value)) = access.next_entry::<String, serde_json::Value>()? {
+            map.entry(key).or_insert(value);
+        }
+        Ok(serde_json::Value::Object(map))
+    }
+}
+
+fn first_value<'de, D>(deserializer: D, keys: &[&str]) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = deserializer.deserialize_map(PickFirstOf(keys))?;
+    if let serde_json::Value::Object(map) = v {
+        for k in keys {
+            if let Some(found) = map.get(*k) {
+                return Ok(Some(found.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn deserialize_first_url<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(first_value(deserializer, &["base_url", "baseUrl"])?
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default())
+}
+
+fn deserialize_first_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(first_value(deserializer, &["mime_type", "mimeType"])?
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default())
+}
+
+fn deserialize_first_string_opt<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(first_value(deserializer, &["frame_rate", "frameRate"])?
+        .and_then(|v| v.as_str().map(String::from)))
+}
+
+fn deserialize_first_string_array_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(first_value(deserializer, &["backup_url", "backupUrl"])?
+        .and_then(|v| match v {
+            serde_json::Value::Array(arr) => Some(
+                arr.into_iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect(),
+            ),
+            serde_json::Value::String(s) => Some(vec![s]),
+            _ => None,
+        }))
+}
+
+/// A `DashSegmentBase` that tolerates B 站 returning it under
+/// `SegmentBase` (camelCase) or `segment_base` (snake_case) — or both.
+/// We deserialize the whole map, then pick the first non-empty pair.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DashSegmentBase {
+    #[serde(default)]
     pub initialization: String,
+    #[serde(default)]
     pub index_range: String,
+}
+
+impl DashSegmentBase {
+    /// Parse from a raw `Value` (which is the entire stream object),
+    /// looking for `SegmentBase` or `segment_base`.
+    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
+        let seg = v
+            .get("SegmentBase")
+            .or_else(|| v.get("segment_base"))?;
+        let init = seg
+            .get("Initialization")
+            .or_else(|| seg.get("initialization"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let idx = seg
+            .get("indexRange")
+            .or_else(|| seg.get("index_range"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        if init.is_empty() && idx.is_empty() {
+            None
+        } else {
+            Some(Self {
+                initialization: init,
+                index_range: idx,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,16 +447,24 @@ pub fn pick_quality(accept_quality: &[i64], max_qn: i64) -> i64 {
 }
 
 /// Expand a `PlayUrlManifest` into a flat list of `PlayableSegment`s.
-/// The DASH path returns one video + one audio segment (we don't
-/// split the m4s into byte ranges — the upstream serves a single
-/// `base_url` per quality). The FLV path returns a single segment.
+///
+/// DASH manifests include **every** quality tier (112/80/64/32/16) as
+/// separate `dash.video[]` entries. We only want the one matching
+/// `manifest.quality` (which B 站's API already chose for us based
+/// on the requested `qn` + the user's account). For audio we pick
+/// the first entry — there is usually one (or one Dolby + one AAC).
 pub fn expand(manifest: &PlayUrlManifest) -> Vec<PlayableSegment> {
     let mut out = Vec::new();
     if let Some(dash) = &manifest.dash {
-        // Pick the first video stream (playurl returns them already
-        // sorted by resolution). The caller can re-fetch with a
-        // different qn if they want a different quality.
-        for v in &dash.video {
+        // DASH video: pick the single stream whose `id` matches the
+        // manifest's `quality` field. B 站 uses the same `id` (i.e.
+        // qn code) for `dash.video[i].id` and the chosen `quality`.
+        let chosen_video = dash
+            .video
+            .iter()
+            .find(|v| v.id == manifest.quality)
+            .or_else(|| dash.video.first());
+        if let Some(v) = chosen_video {
             out.push(PlayableSegment {
                 url: v.base_url.clone(),
                 backup_urls: v.backup_url.clone().unwrap_or_default(),
@@ -230,7 +475,7 @@ pub fn expand(manifest: &PlayUrlManifest) -> Vec<PlayableSegment> {
                     v.width
                         .zip(v.height)
                         .map(|(w, h)| format!("{w}x{h}"))
-                        .unwrap_or_else(|| v.idc().to_string())
+                        .unwrap_or_else(|| v.id.to_string())
                 ),
                 kind: SegmentKind::Video,
                 bandwidth: v.bandwidth,
@@ -239,7 +484,10 @@ pub fn expand(manifest: &PlayUrlManifest) -> Vec<PlayableSegment> {
                 codec: v.codecs.clone(),
             });
         }
-        for a in &dash.audio {
+        // DASH audio: pick the first audio stream. The list is usually
+        // ordered by quality (highest bitrate first); the manifest's
+        // `quality` field doesn't apply to audio.
+        for a in dash.audio.iter().take(1) {
             out.push(PlayableSegment {
                 url: a.base_url.clone(),
                 backup_urls: a.backup_url.clone().unwrap_or_default(),
@@ -281,12 +529,6 @@ pub fn expand(manifest: &PlayUrlManifest) -> Vec<PlayableSegment> {
         }
     }
     out
-}
-
-impl DashStream {
-    fn idc(&self) -> &i64 {
-        &self.id
-    }
 }
 
 // =====================  Tests  =====================
@@ -401,5 +643,96 @@ mod tests {
             raw: json!({}),
         };
         assert!(expand(&manifest).is_empty());
+    }
+
+    /// B 站 fnval=16 (DASH) responses ship the same logical field
+    /// under both camelCase and snake_case names — sometimes both at
+    /// once. The `deserialize_with` helpers in this module must accept
+    /// either name without failing.
+    #[test]
+    fn dash_stream_accepts_snake_case_only() {
+        let raw = r#"{
+            "id": 32,
+            "base_url": "https://example/v.m4s",
+            "bandwidth": 100000,
+            "mime_type": "video/mp4",
+            "codecs": "avc1.640033",
+            "width": 1920,
+            "height": 1080
+        }"#;
+        let s: DashStream = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.base_url, "https://example/v.m4s");
+        assert_eq!(s.width, Some(1920));
+        assert_eq!(s.height, Some(1080));
+    }
+
+    #[test]
+    fn dash_stream_accepts_camel_case_only() {
+        let raw = r#"{
+            "id": 32,
+            "baseUrl": "https://example/v.m4s",
+            "bandwidth": 100000,
+            "mimeType": "video/mp4",
+            "codecs": "avc1.640033",
+            "width": 1920,
+            "height": 1080,
+            "frameRate": "30.000"
+        }"#;
+        let s: DashStream = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.base_url, "https://example/v.m4s");
+        assert_eq!(s.frame_rate.as_deref(), Some("30.000"));
+    }
+
+    /// This is the case that broke real downloads: B 站 returns BOTH
+    /// `baseUrl` AND `base_url` (and the same for `mimeType`,
+    /// `frameRate`, `backupUrl`/`backup_url`). Serde's `#[serde(alias)]`
+    /// barfs on duplicates, so we use `deserialize_with` to read into
+    /// a `Value` first and pick whichever is present.
+    #[test]
+    fn dash_stream_accepts_both_names_at_once() {
+        let raw = r#"{
+            "id": 32,
+            "baseUrl": "https://camel/v.m4s",
+            "base_url": "https://snake/v.m4s",
+            "backupUrl": ["https://camel/bak.m4s"],
+            "backup_url": ["https://snake/bak.m4s"],
+            "bandwidth": 100000,
+            "mimeType": "video/mp4",
+            "mime_type": "video/mp4",
+            "codecs": "avc1.640033",
+            "width": 1920,
+            "height": 1080,
+            "frameRate": "30.000",
+            "frame_rate": "30.000",
+            "startWithSap": 1,
+            "start_with_sap": 1,
+            "SegmentBase": {"Initialization": "0-916", "indexRange": "917-2732"},
+            "segment_base": {"initialization": "0-916", "index_range": "917-2732"}
+        }"#;
+        let s: DashStream = serde_json::from_str(raw).expect("must not fail on dual-name duplicates");
+        // snake_case wins (first in our key list).
+        assert_eq!(s.base_url, "https://snake/v.m4s");
+        assert_eq!(s.mime_type, "video/mp4");
+        assert_eq!(s.frame_rate.as_deref(), Some("30.000"));
+        assert!(s.backup_url.is_some());
+        assert_eq!(s.backup_url.as_ref().unwrap().len(), 1);
+        assert!(s.segment_base.is_some());
+    }
+
+    #[test]
+    fn dash_stream_minimal_required() {
+        // Most minimal possible DASH video stream. All non-required
+        // fields should default.
+        let raw = r#"{
+            "id": 7,
+            "baseUrl": "https://example/v.m4s"
+        }"#;
+        let s: DashStream = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.id, 7);
+        assert_eq!(s.base_url, "https://example/v.m4s");
+        assert_eq!(s.bandwidth, 0);
+        assert_eq!(s.mime_type, "");
+        assert_eq!(s.codecs, "");
+        assert_eq!(s.width, None);
     }
 }

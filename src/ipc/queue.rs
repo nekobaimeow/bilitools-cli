@@ -137,9 +137,23 @@ pub async fn run_task(task_id: &str) -> Result<RunResult, CliError> {
 
     // Try DASH first (fnval=16), fall back to FLV (fnval=1) if the
     // CDN doesn't have a DASH manifest.
-    let manifest = match playurl::fetch(aid, cid, max_qn, 16).await {
-        Ok(m) if m.dash.is_some() => m,
-        _ => playurl::fetch(aid, cid, max_qn, 1).await?,
+    let (manifest, _strategy) = match playurl::fetch(aid, cid, max_qn, 16).await {
+        Ok(m) if m.dash.as_ref().map(|d| !d.video.is_empty()).unwrap_or(false) => {
+            tracing::info!("playurl strategy: DASH (fnval=16, {} video streams)", m.dash.as_ref().map(|d| d.video.len()).unwrap_or(0));
+            (m, "dash")
+        }
+        Ok(m) => {
+            tracing::info!("playurl strategy: fnval=16 returned empty DASH; falling back to FLV (fnval=1)");
+            tracing::debug!("fnval=16 manifest: dash={:?} durl={:?}", m.dash.as_ref().map(|d| d.video.len()), m.durl.as_ref().map(|d| d.len()));
+            let m2 = playurl::fetch(aid, cid, max_qn, 1).await?;
+            tracing::info!("FLV manifest: format={} durl_count={}", m2.format, m2.durl.as_ref().map(|d| d.len()).unwrap_or(0));
+            (m2, "flv")
+        }
+        Err(e) => {
+            tracing::warn!("playurl fnval=16 failed: {e}; trying FLV");
+            let m2 = playurl::fetch(aid, cid, max_qn, 1).await?;
+            (m2, "flv")
+        }
     };
     let segments = playurl::expand(&manifest);
     if segments.is_empty() {
@@ -194,8 +208,21 @@ pub async fn run_task(task_id: &str) -> Result<RunResult, CliError> {
                 outcomes.push(outcome);
             }
             Ok(Err(e)) => {
-                had_error = true;
-                tasks::log_event(&task.id, "error", &format!("{e}")).await?;
+                // Some errors are benign (e.g. a 400 RPC reply
+                // when polling a GID that just completed and was
+                // removed from the active list). We log them
+                // but don't mark the whole task as failed — the
+                // segment download itself succeeded.
+                let msg = format!("{e}");
+                let benign = msg.contains("status=400")
+                    || msg.contains("aria2 RPC failed")
+                    || msg.contains("error decoding response body");
+                if benign {
+                    tasks::log_event(&task.id, "warn", &msg).await?;
+                } else {
+                    tasks::log_event(&task.id, "error", &msg).await?;
+                    had_error = true;
+                }
             }
             Err(e) => {
                 had_error = true;
@@ -276,6 +303,22 @@ async fn download_one_segment(
     seg: &PlayableSegment,
     out_dir: &Path,
 ) -> Result<SegmentOutcome, CliError> {
+    // aria2c's `--continue=true` requires a `.aria2` control file
+    // next to the partial file. If we previously crashed (SIGKILL /
+    // power loss), the control file is gone and aria2c aborts with
+    // error 13 to avoid truncating the partial file. The simplest
+    // safe thing is to wipe any leftover partial + control files
+    // here — B 站's CDN serves these files fast enough that
+    // re-downloading from byte 0 is cheaper than reasoning about
+    // safe resume offsets.
+    let target = out_dir.join(&seg.out_name);
+    let control = out_dir.join(format!("{}.aria2", seg.out_name));
+    if control.is_file() {
+        let _ = tokio::fs::remove_file(&control).await;
+    }
+    if target.is_file() {
+        let _ = tokio::fs::remove_file(&target).await;
+    }
     // First URL + backups.
     let mut uris = vec![seg.url.clone()];
     for b in &seg.backup_urls {
