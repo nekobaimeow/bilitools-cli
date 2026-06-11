@@ -354,7 +354,7 @@ bilitools --json audio <bv> --transcribe | jq -s '.[0].audio + .[1].transcript'
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--transcribe` | off | Run sensevoice after the m4a is downloaded |
-| `--transcribe-language <zh\|yue\|en\|ja\|ko>` | `zh` | Language hint for ASR |
+| `--transcribe-language <auto\|zh\|yue\|en\|ja\|ko>` | `auto` | Language hint for ASR. `auto` = don't pass `-l` to sensevoice; the multilingual model detects per segment (best for B 站's typical zh+en mix) |
 | `--transcribe-device <cpu\|cuda>` | `cpu` | Inference device |
 | `--transcribe-keep-tags` | off | Keep `<|HAPPY|>` emotion tags in transcript |
 | `--sensevoice-cli <path>` | `which sensevoice` | Override the sensevoice script path |
@@ -426,6 +426,14 @@ call those tools directly on the `.m4a` output.
    `--features transcribe` AND the `sensevoice` Python CLI must be on PATH (or
    passed via `--sensevoice-cli`). See "Audio Transcription" above. bilitools
    will refuse with a clear error rather than silently no-op.
+
+9. **ASR may mangle proper nouns.** SenseVoiceSmall is a 240 M-param model; it
+   routinely mishears foreign names ("Hegseth" → "黑克萨斯 / 黑格莱斯 / 黑克赛斯",
+   3 different spellings across the same video). English technical terms often
+   survive intact (SSNX, 095, 3D), but Chinese proper nouns and romanized
+   foreign names are lossy. Treat transcripts as ~95% accurate, not 100%. If
+   verbatim quoting matters, cross-check against the B 站 AI subtitles (which
+   bilitools already harvests in `harvest`).
 
 ## Data Locations
 

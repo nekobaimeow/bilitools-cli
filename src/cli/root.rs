@@ -184,9 +184,12 @@ pub enum Command {
         #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
         #[arg(long)]
         transcribe: bool,
-        /// Language for ASR: zh | yue | en | ja | ko (default zh).
+        /// Language hint for ASR: auto | zh | yue | en | ja | ko.
+        /// "auto" (default) lets the SenseVoiceSmall model detect per segment —
+        /// recommended for B 站 content that mixes Chinese narration with
+        /// English terms (model names, acronyms, etc.).
         #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
-        #[arg(long, default_value = "zh")]
+        #[arg(long, default_value = "auto")]
         transcribe_language: String,
         /// Inference device: cpu | cuda (default cpu).
         #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]

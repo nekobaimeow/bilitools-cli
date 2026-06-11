@@ -43,7 +43,10 @@ pub struct TranscribeOpts {
     pub m4a_path: PathBuf,
     /// Target text file (created by sensevoice). `None` = let sensevoice pick.
     pub output_txt: Option<PathBuf>,
-    /// Language code: zh (default), yue, en, ja, ko.
+    /// Language hint passed to sensevoice / FunASR. `"auto"` = don't pass
+    /// `-l` at all and let the model auto-detect per-segment. SenseVoiceSmall
+    /// is a multilingual model; the hint biases but does not force output
+    /// language. Supported: zh | yue | en | ja | ko | auto.
     pub language: String,
     /// Inference device: cpu (default) or cuda.
     pub device: String,
@@ -64,7 +67,11 @@ impl Default for TranscribeOpts {
         Self {
             m4a_path: PathBuf::new(),
             output_txt: None,
-            language: "zh".into(),
+            // "auto" = don't pass `-l` to sensevoice; the model detects per segment.
+            // SenseVoiceSmall is multilingual and handles mixed zh/en/ja/ko audio
+            // gracefully. Forcing `zh` historically just added noise (e.g. mapping
+            // English TED talks to pinyin fragments).
+            language: "auto".into(),
             device: "cpu".into(),
             keep_tags: false,
             vad_max_sec: 15,
@@ -175,13 +182,17 @@ async fn transcribe_impl(opts: &TranscribeOpts) -> Result<TranscribeResult> {
     // 4) Build command. Use `python3 SCRIPT` form (NOT a shebang exec) so
     //    we don't depend on the script being chmod +x or having a working
     //    #! interpreter on the user's system.
+    //
+    //    "auto" language = don't pass `-l` at all; let FunASR/SenseVoice
+    //    auto-detect per segment. The model is multilingual — for mixed
+    //    zh/en/ja/ko content (e.g. a B 站 video where the host speaks
+    //    Chinese but quotes English terms), this is the only mode that
+    //    gets both right in the same transcript.
     let mut cmd = Command::new(&python_bin);
     cmd.arg(&sensevoice_cli)
         .arg(&opts.m4a_path)
         .arg("-o")
         .arg(&output_txt)
-        .arg("-l")
-        .arg(&opts.language)
         .arg("-d")
         .arg(&opts.device)
         .arg("--vad-max-sec")
@@ -189,6 +200,9 @@ async fn transcribe_impl(opts: &TranscribeOpts) -> Result<TranscribeResult> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
+    if opts.language != "auto" {
+        cmd.arg("-l").arg(&opts.language);
+    }
     if opts.keep_tags {
         cmd.arg("-k");
     }
@@ -198,9 +212,9 @@ async fn transcribe_impl(opts: &TranscribeOpts) -> Result<TranscribeResult> {
             opts.device
         )));
     }
-    if !matches!(opts.language.as_str(), "zh" | "yue" | "en" | "ja" | "ko") {
+    if !matches!(opts.language.as_str(), "auto" | "zh" | "yue" | "en" | "ja" | "ko") {
         return Err(CliError::msg(format!(
-            "invalid --transcribe-language '{}' (expected zh|yue|en|ja|ko)",
+            "invalid --transcribe-language '{}' (expected auto|zh|yue|en|ja|ko)",
             opts.language
         )));
     }
@@ -375,13 +389,36 @@ Transcribing (zh)...
     #[test]
     fn default_opts_sane() {
         let o = TranscribeOpts::default();
-        assert_eq!(o.language, "zh");
+        // language default is "auto" — we don't pass `-l` to sensevoice at all,
+        // letting the multilingual model detect per segment. B 站 content
+        // often mixes zh narration with English terms (SSNX, Block5, ...).
+        assert_eq!(o.language, "auto");
         assert_eq!(o.device, "cpu");
         assert!(!o.keep_tags);
         assert_eq!(o.vad_max_sec, 15);
         assert!(o.python_bin.is_none());
         assert!(o.sensevoice_cli.is_none());
         assert_eq!(o.timeout, Duration::from_secs(30 * 60));
+    }
+
+    #[test]
+    fn language_whitelist_includes_auto() {
+        // mirrors the match guard in transcribe_impl — any new language code
+        // must be added to BOTH places or users will get a clear error.
+        let valid = ["auto", "zh", "yue", "en", "ja", "ko"];
+        for code in valid {
+            assert!(
+                matches!(code, "auto" | "zh" | "yue" | "en" | "ja" | "ko"),
+                "language code {code} should be in whitelist"
+            );
+        }
+        // bogus values must NOT be in the whitelist
+        for bogus in ["fr", "de", "ru", ""] {
+            assert!(
+                !matches!(bogus, "auto" | "zh" | "yue" | "en" | "ja" | "ko"),
+                "bogus language code {bogus} should be rejected"
+            );
+        }
     }
 
     /// Real subprocess smoke test — needs `python3 sensevoice` on PATH
