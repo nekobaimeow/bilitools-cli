@@ -10,6 +10,7 @@
 use crate::backends::http::ProxyConfig;
 use crate::backends::paths::Paths;
 use crate::error::CliError;
+use crate::ipc::login;
 use crate::ipc::shared::{init_client, init_client_no_proxy, set_proxy};
 use crate::ipc::storage::{config, db};
 use once_cell::sync::OnceCell;
@@ -53,6 +54,20 @@ impl AppContext {
 
         // Initialize DB (idempotent).
         db::init().await?;
+
+        // Bootstrap B 站 风控 fingerprint cookies. These are NOT persisted
+        // (B 站 rotates them on a session scale and rejects requests that
+        // ship a SESSDATA without the matching buvid3 / bili_ticket / _uuid).
+        // We call them once at startup so every subsequent request — search,
+        // download, danmaku — has a fully-formed Cookie header.
+        //
+        // If any of these fail we propagate the error to the caller. The
+        // fingerprint APIs themselves are public; failures here usually mean
+        // a network/proxy problem the user wants to see, not silently boot
+        // with a broken cookie header.
+        login::get_buvid().await?;
+        login::get_bili_ticket().await?;
+        login::get_uuid().await?;
 
         // Load settings, then construct HTTP clients with the right proxy.
         let settings = config::read().await;
