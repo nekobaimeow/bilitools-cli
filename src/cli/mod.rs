@@ -15,3 +15,4 @@ pub mod review;
 pub mod root;
 pub mod schedule;
 pub mod search;
+pub mod subtitle;

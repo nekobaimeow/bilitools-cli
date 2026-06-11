@@ -126,6 +126,18 @@ pub enum Command {
         no_login_warn: bool,
     },
 
+    /// Fetch subtitles (metadata or JSON files) for a B 站 video.
+    Subtitle {
+        /// BV id, av id, or full URL.
+        input: String,
+        /// Output directory for downloaded .json files.
+        #[arg(long, short = 'o')]
+        output_dir: Option<std::path::PathBuf>,
+        /// Download subtitle JSON bodies to disk (default: list metadata only).
+        #[arg(long, short = 'd')]
+        download: bool,
+    },
+
     /// Cache management.
     #[command(subcommand)]
     Cache(CacheCmd),

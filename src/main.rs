@@ -3,7 +3,7 @@
 
 use bilitools::cli::output::{Output, OutputMode};
 use bilitools::cli::root::{Cli, Command};
-use bilitools::cli::{auth, cache, config as cfg, danmaku, db as dbcmd, download, info, parse as par, repl, review, schedule, search};
+use bilitools::cli::{auth, cache, config as cfg, danmaku, db as dbcmd, download, info, parse as par, repl, review, schedule, search, subtitle};
 use bilitools::context;
 use bilitools::doctor;
 use bilitools::error::CliError;
@@ -69,6 +69,7 @@ async fn async_run(cli: Cli) -> Result<(), CliError> {
         Command::Search { .. } => search::run(&cmd, &out).await,
         Command::Danmaku { .. } => danmaku::run(&cmd, &out).await,
         Command::Review { .. } => review::run(&cmd, &out).await,
+        Command::Subtitle { .. } => subtitle::run(&cmd, &out).await,
         Command::Doctor => {
             let report = doctor::run().await?;
             out.ok(report)

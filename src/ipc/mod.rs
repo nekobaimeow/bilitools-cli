@@ -19,3 +19,4 @@ pub mod review;
 pub mod search;
 pub mod shared;
 pub mod storage;
+pub mod subtitle;
