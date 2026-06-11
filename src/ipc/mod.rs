@@ -8,6 +8,7 @@
 //! SQLite persistence) while removing the GUI layer.
 
 pub mod bilibili_api;
+pub mod audio;
 pub mod danmaku;
 pub mod login;
 pub mod aria2c;

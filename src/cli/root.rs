@@ -162,6 +162,23 @@ pub enum Command {
         review_ps: u32,
     },
 
+    /// Download the audio track only (m4a) from a B 站 video.
+    ///
+    /// Use case: extract audio for offline listening or speech-to-text
+    /// post-processing (e.g. whisper, MiniMax). The video stream is
+    /// never downloaded.
+    Audio {
+        /// BV id, av id, or full URL.
+        input: String,
+        /// Output directory for the .m4a file.
+        #[arg(long, short = 'o', default_value = ".")]
+        output_dir: std::path::PathBuf,
+        /// Video quality code for the DASH tier (default 80 = 1080P).
+        /// Audio bitrate is chosen by B 站 independently of this.
+        #[arg(long, short = 'q', default_value = "80")]
+        quality: u32,
+    },
+
     /// Cache management.
     #[command(subcommand)]
     Cache(CacheCmd),

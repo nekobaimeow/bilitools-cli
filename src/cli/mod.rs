@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod cache;
 pub mod config;
+pub mod audio;
 pub mod danmaku;
 pub mod db;
 pub mod download;
