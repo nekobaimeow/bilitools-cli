@@ -1,6 +1,6 @@
 ---
 name: bilitools
-description: "Use this skill whenever the user needs to download, search, or inspect content from Bilibili (B 站). Triggers: user mentions B 站, Bilibili, BV/av/SS/EP, 弹幕, 字幕, 评论, 封面, UP 主, 番剧, 课堂, or wants to fetch danmaku / comments / subtitles / audio / video / search results from bilibili.com. This skill wraps the `bilitools` CLI which is a pure-Rust port of the BiliTools GUI; it covers video download (DASH segments via aria2c + ffmpeg merge), audio-only download (m4a), danmaku (XML or ASS via DanmakuFactory), comments (hot + time + sub-replies), subtitles (JSON, requires login + wbi sign), search (video / bangumi / user / cheese course aware), and a `harvest` batch that does all four for top-N search results. Use this whenever B 站 / Bilibili content extraction is the task. Do NOT use for non-Bilibili video sites (YouTube, Vimeo, etc.) or for posting content back to B 站."
+description: "Use this skill whenever the user needs to download, search, or inspect content from Bilibili (B 站). Triggers: user mentions B 站, Bilibili, BV/av/SS/EP, 弹幕, 字幕, 评论, 封面, UP 主, 番剧, 课堂, "看视频" (analyze a video), "分析这个 B 站视频" (analyze this B 站 video), "帮我扒一下" (scrape/extract), or wants to fetch danmaku / comments / subtitles / audio transcript / video metadata / search results from bilibili.com. This skill wraps the `bilitools` CLI which is a pure-Rust port of the BiliTools GUI; it covers video download (DASH segments via aria2c + ffmpeg merge), audio-only download (m4a) + optional local ASR (sensevoice), danmaku (XML or ASS via DanmakuFactory), comments (hot + time + sub-replies), subtitles (JSON, requires login + wbi sign), search (video / bangumi / user / cheese course aware), and a `harvest` batch that does all four for top-N search results. Use this whenever B 站 / Bilibili content extraction or text-based video analysis is the task. Do NOT use for non-Bilibili video sites (YouTube, Vimeo, etc.) or for posting content back to B 站."
 license: GPL-3.0-or-later
 ---
 
@@ -15,6 +15,9 @@ fingerprinting, aria2 RPC, ffmpeg merge, SQLite task queue) is reused unchanged;
 Tauri GUI layer was stripped.
 
 **When to use:**
+- User wants to **analyze / "watch" a B 站 video by extracting its text** — the standard
+  "看视频" workflow: search → metadata → danmaku + comments + subtitles + audio transcript
+  (see [Analyzing a B 站 Video](#analyzing-a-b-站-video-the-standard-看视频-workflow))
 - User wants to download a B 站 video (single, batch, or scheduled)
 - User wants just the audio track of a B 站 video (m4a, no video)
 - User wants danmaku, comments, or subtitles extracted to JSON / XML / ASS
@@ -24,7 +27,10 @@ Tauri GUI layer was stripped.
 **When NOT to use:**
 - Other video sites (YouTube → `yt-dlp`, Vimeo, etc.)
 - Posting or interacting with B 站 (uploading, liking, commenting)
-- Viewing video content (this skill is for extraction, not playback)
+- **Actually playing back video** — this skill is for text-based extraction, not
+  media playback. If the user wants to *watch* the video, this skill harvests the text
+  (弹幕 / 评论 / 字幕 / 音频转录) so the agent can summarize; the user still watches
+  the video themselves in a browser.
 
 ## Quick Reference
 
@@ -39,6 +45,7 @@ Tauri GUI layer was stripped.
 | Batch: top 5 黄金 results → danmaku + comments + subs | `bilitools harvest "黄金" --limit 5 -o ./out` |
 | Check login + sidecars | `bilitools doctor` |
 | Log in (QR code) | `bilitools auth qrcode -o qr.png` + `bilitools auth qrcode-poll <key>` |
+| **Analyze a video** (搜 → 元数据 → 弹幕/评论/字幕/音频转录) | see [standard workflow below](#analyzing-a-b-站-video-the-standard-看视频-workflow) |
 
 All subcommands accept `--json` for machine-readable output. **Always prefer `--json` when
 this skill is being driven by another agent** (table output is for humans, JSON is stable).
@@ -161,7 +168,10 @@ bilitools audio <bv> --transcribe --transcribe-language en --transcribe-device c
 
 - DASH audio segment → reqwest download (no aria2c overhead for single file) → ffmpeg
   `-vn -c:a copy` → `.m4a`.
-- Output: `{sanitize(title)}-{cid}.m4a`. Chinese chars become `_`; CID preserved for uniqueness.
+|- Output: `{sanitize(title)}-{cid}.m4a`. Non-ASCII characters (Chinese etc.) become
+  `_`; ASCII letters, digits, and a few separators (`- _ .`) are preserved. The CID is
+  always appended for uniqueness. (E.g. `2026.6.11黄金…IPO…` →
+  `2026.6.11_______________________4024______________________________IPO_________-39024790178.m4a`.)
 - Use case: offline listening, speech-to-text post-processing (Whisper, MiniMax, **sensevoice**, etc.).
 
 ### `download` — Full video download (DASH)
@@ -214,6 +224,119 @@ bilitools harvest "原神" --limit 3 --no-danmaku --no-review --no-subtitle
 | `db export/import/tasks` | SQLite task DB management |
 | `doctor` | Health check (sidecars + B 站 nav API) |
 | `repl` | Interactive REPL (rarely needed; CLI is friendlier) |
+
+## Analyzing a B 站 Video (the standard "看视频" workflow)
+
+When the user gives you a B 站 URL (or BV / av / SS / EP id, or a search theme) and says
+something like "看这个视频", "分析一下", "帮我扒一下里面的内容", "总结一下讲的啥",
+**do not try to play the video**. You harvest every text source B 站 exposes, then
+synthesize.
+
+### Phase 0 — Resolve the input
+
+The input may be any of:
+
+| Input form | Action |
+|------------|--------|
+| Full URL `https://www.bilibili.com/video/BV...` | Strip scheme/host; use the id |
+| Bare `BV1CZEY67E8o` / `av170001` / `ss12345` / `ep67890` | Use as-is |
+| Search theme "黄金价格 2026" | Run `search` first, present top results, ask user to pick or auto-pick #1 |
+| Fuzzy "昨天那个视频" | If you have session history pointing at a BV, use it; else ask |
+
+`bilitools parse` accepts all the above forms and returns the canonical `{bvid, aid, cid,
+title, duration, ...}`. Use it as a normalization step before anything else.
+
+```bash
+bilitools --json parse url "https://www.bilibili.com/video/BV1CZEY67E8o"
+# → {"data": {"bvid": "BV1CZEY67E8o", "aid": ..., "cid": ..., "title": "...", ...}}
+```
+
+### Phase 1 — Always-run text harvests (no audio, fast)
+
+These four subcommands cover **what was said** in the video. Run them in parallel (they
+are independent):
+
+```bash
+# 1a. Metadata (title, UP 主, desc, tags, stats, cid for the others)
+bilitools --json parse url BV... | jq '.data | {bvid,title,author,desc,pubdate,duration,stat}'
+
+# 1b. 弹幕 — real-time viewer reactions; for analysis, prefer `--source live` XML
+bilitools --json danmaku BV... --format xml --source live -o /tmp/dm
+
+# 1c. 评论 (top + recent) — usually more analytical than danmaku
+bilitools --json review BV... --sort hot --ps 30
+bilitools --json review BV... --sort time --ps 30  # secondary pass for recency
+
+# 1d. 字幕 — the most accurate transcript (B 站's own AI or human subs)
+bilitools --json subtitle BV... --download -o /tmp/subs
+```
+
+If `danmaku` / `review` / `subtitle` return empty / 0 entries, run `bilitools auth
+status` — the most common cause is **not being logged in** (anonymous mode caps
+subtitles and comments). If unauthenticated, stop and tell the user to scan a QR.
+
+### Phase 2 — Optional: audio → transcript (when subs are missing or wrong)
+
+If `subtitle` returned 0 entries, OR the user wants **verbatim** speech-to-text
+(dialogue, slang, music lyrics), fall back to downloading audio and running ASR:
+
+```bash
+# 2a. Download m4a only (no video, fast)
+bilitools --json audio BV... -o /tmp/audio
+
+# 2b. (optional) transcribe via sensevoice — requires --features transcribe at build
+#     AND the `sensevoice` CLI on PATH; see "Audio Transcription" below
+bilitools --json audio BV... --transcribe -o /tmp/audio
+```
+
+If the binary was NOT built with `--features transcribe`, OR `sensevoice` is missing,
+say so clearly and offer the user the `.m4a` path so they can run their own ASR.
+**Do not silently skip** — tell the user what you couldn't do and why.
+
+### Phase 3 — Synthesize (this is the actual "watching")
+
+Once you have the four text sources, read them and produce the analysis. Suggested
+structure for the final reply:
+
+1. **One-line summary** — what the video is, who made it, when
+2. **Outline / chapters** — derive from subtitle timestamps or desc structure
+3. **Key claims / facts** — from subtitle body, with original phrasing quoted
+4. **Viewer pulse** — top themes from hot comments + high-frequency danmaku
+   (count occurrences, not just the first hit)
+5. **Disagreements / controversy** — flagged from comments with `like > N` or
+   sub-replies > 0
+6. **Open questions / TODO** — anything you couldn't extract (e.g. visual-only
+   content, missing subs, foreign language you can't transcribe)
+
+### Concurrency & error handling
+
+- Phases 1a–1d are **independent** — fire them in parallel (delegate_task batch
+  or background processes). Total wall time ≈ slowest single call, not sum.
+- If `danmaku` fails with a CID mismatch, re-run `parse` — B 站 sometimes returns
+  the wrong CID for bangumi/UGC; the XML endpoint will 404 on bad CID.
+- If `subtitle` returns a list but `--download` errors on one language, the others
+  are usually still fine — check `data.degraded[]` and continue.
+- Cap `danmaku` reads at ~50k entries for a 2h video; above that, sample by time
+  bucket (e.g. first/last/middle 5 min) rather than reading the whole XML.
+
+### One-liner: "do everything" via harvest
+
+For top-N search results, `harvest` does Phases 1a–1d in one call:
+
+```bash
+bilitools harvest "黄金价格" --limit 5 -o ./gold-batch
+# Produces 5 subdirs: <title>/{danmaku.xml, review.json, subtitle-*.json, meta.json}
+```
+
+For a single video, you can fake the same shape with:
+
+```bash
+mkdir -p /tmp/one/{dm,subs}
+bilitools danmaku BV... -o /tmp/one/dm
+bilitools subtitle BV... --download -o /tmp/one/subs
+bilitools review BV... --json > /tmp/one/review.json
+bilitools --json parse url BV... > /tmp/one/meta.json
+```
 
 ## Common Workflows
 
@@ -419,8 +542,10 @@ call those tools directly on the `.m4a` output.
 6. **`--limit` on `harvest` is best-effort.** B 站's `page_size` param is sometimes
    honored, sometimes capped at 20. The `harvest` walks whatever the API returns.
 
-7. **Output file names** sanitize Chinese → `_` and truncate at 80 chars. The CID is
-   always appended for uniqueness: `{slug}-{cid}.m4a`.
+7. **Output file names** sanitize non-ASCII (Chinese etc.) → `_` and truncate at 80
+   chars. ASCII letters / digits / a few separators (`- _ .`) are kept. The CID is
+   always appended for uniqueness: `{slug}-{cid}.m4a`. Long Chinese titles can produce
+   a wall of underscores — use `--json` to get the original title in the response.
 
 8. **`--transcribe` requires two opt-ins.** The bilitools binary must be built with
    `--features transcribe` AND the `sensevoice` Python CLI must be on PATH (or
