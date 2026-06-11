@@ -60,10 +60,20 @@ impl std::str::FromStr for SearchType {
     }
 }
 
-/// 单条搜索结果（视频类型）
+/// 单条搜索结果（视频或课堂课程）
+///
+/// 区分两种来源：普通视频（`kind = "video"`，有 `bvid`）和 B 站"课堂"
+/// 课程（`kind = "cheese"`，有 `ssid` 即 season_id，无 `bvid`）。
+/// 这两类条目 B 站搜索 API 都返回在同一个 result 数组里——下
+/// 游命令（download / danmaku）需要靠 `kind` 决定走哪条路径。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoResult {
-    pub bvid: String,
+    /// 结果类别：`"video"` 或 `"cheese"`。
+    pub kind: String,
+    /// 普通视频的 BV 号；课堂课程时为 `None`。
+    pub bvid: Option<String>,
+    /// 课堂课程的 season_id（仅当 `kind == "cheese"` 时存在）。
+    pub ssid: Option<String>,
     pub title: String,
     pub author: String,
     pub mid: i64,
@@ -142,7 +152,11 @@ struct RawVideoData {
 
 #[derive(Debug, Deserialize)]
 struct RawVideoEntry {
-    bvid: String,
+    /// B 站 search sometimes returns empty/missing `bvid` for non-video
+    /// entries (e.g. cheese 课堂 courses), so we accept null/empty here
+    /// and recover via the `arcurl` discriminator in the mapper.
+    #[serde(default)]
+    bvid: Option<String>,
     title: String,
     author: String,
     mid: i64,
@@ -278,6 +292,26 @@ fn encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
+/// 根据 `arcurl` 推断条目类别。
+///
+/// B 站 search API 在 2025-2026 之后会把"课堂"课程条目
+/// （URL 形如 `/cheese/play/ss{season_id}`）混进视频结果流。
+/// 区分这两种来源是后续 `download` / `danmaku` 命令正确 dispatch
+/// 的前提。`arcurl` 是 B 站自己返回的 ground truth，我们只信它。
+fn classify_kind(arcurl: &str) -> (String, Option<String>) {
+    // 形如 ".../cheese/play/ss{season_id}?..."，从 URL 路径里抽 ss 号。
+    // 注意：URL 后面可能跟 query string，所以用 rfind 定位 '/'。
+    if let Some(idx) = arcurl.find("/cheese/play/ss") {
+        // 找到 "ss" 之后的数字部分
+        let after = &arcurl[idx + "/cheese/play/ss".len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() {
+            return ("cheese".to_string(), Some(digits));
+        }
+    }
+    ("video".to_string(), None)
+}
+
 async fn get_json<T>(url_base: &str, params: &BTreeMap<String, String>) -> Result<RawResp<T>>
 where
     T: for<'de> Deserialize<'de> + Default,
@@ -375,20 +409,25 @@ pub async fn search_videos(keyword: &str, page: u32, page_size: u32) -> Result<S
     let results = data
         .result
         .into_iter()
-        .map(|e| VideoResult {
-            bvid: e.bvid,
-            title: strip_em(&e.title),
-            author: e.author,
-            mid: e.mid,
-            duration: e.duration.clone(),
-            duration_sec: parse_duration(&e.duration),
-            play: e.play,
-            pubdate: e.pubdate,
-            description: strip_em(&e.description),
-            pic: e.pic,
-            typename: e.typename,
-            tid: e.tid,
-            arcurl: e.arcurl,
+        .map(|e| {
+            let (kind, ssid) = classify_kind(&e.arcurl);
+            VideoResult {
+                kind,
+                bvid: e.bvid.filter(|s| !s.is_empty()),
+                ssid,
+                title: strip_em(&e.title),
+                author: e.author,
+                mid: e.mid,
+                duration: e.duration.clone(),
+                duration_sec: parse_duration(&e.duration),
+                play: e.play,
+                pubdate: e.pubdate,
+                description: strip_em(&e.description),
+                pic: e.pic,
+                typename: e.typename,
+                tid: e.tid,
+                arcurl: e.arcurl,
+            }
         })
         .collect();
     Ok(SearchResults {
@@ -544,9 +583,9 @@ mod tests {
 
     #[test]
     fn video_result_parses_raw() {
-        // 模拟 raw entry → 转换
+        // 模拟 raw entry → 转换（普通视频）
         let raw = RawVideoEntry {
-            bvid: "BV1abc".into(),
+            bvid: Some("BV1abc".into()),
             title: "&lt;em class=\"keyword\"&gt;原神&lt;/em&gt;".into(),
             author: "官方".into(),
             mid: 123,
@@ -566,8 +605,11 @@ mod tests {
             coin: None,
             share: None,
         };
+        let (kind, ssid) = classify_kind(&raw.arcurl);
         let v = VideoResult {
-            bvid: raw.bvid,
+            kind,
+            bvid: raw.bvid.clone(),
+            ssid,
             title: strip_em(&raw.title),
             author: raw.author,
             mid: raw.mid,
@@ -581,8 +623,87 @@ mod tests {
             tid: raw.tid,
             arcurl: raw.arcurl,
         };
+        assert_eq!(v.kind, "video".to_string());
+        assert_eq!(v.ssid, None);
+        assert_eq!(v.bvid.as_deref(), Some("BV1abc"));
         assert_eq!(v.title, "原神");
         assert_eq!(v.duration_sec, 225);
+    }
+
+    #[test]
+    fn video_result_parses_raw_cheese() {
+        // 模拟 raw entry → 转换（课堂课程）
+        let raw = RawVideoEntry {
+            bvid: None, // cheese 课程没有 bvid
+            title: "原神全角色机制讲解".into(),
+            author: "某机构".into(),
+            mid: 999,
+            duration: "0:00".into(),
+            play: 1987,
+            pubdate: 0,
+            description: "".into(),
+            pic: "".into(),
+            typename: "".into(), // cheese 的 typename 是空
+            tid: None,
+            arcurl: "https://www.bilibili.com/cheese/play/ss959815180?query_from=0".into(),
+            tag: None,
+            like: None,
+            danmaku: None,
+            reply: None,
+            favorite: None,
+            coin: None,
+            share: None,
+        };
+        let (kind, ssid) = classify_kind(&raw.arcurl);
+        let v = VideoResult {
+            kind,
+            bvid: raw.bvid,
+            ssid,
+            title: raw.title.clone(),
+            author: raw.author,
+            mid: raw.mid,
+            duration: raw.duration.clone(),
+            duration_sec: parse_duration(&raw.duration),
+            play: raw.play,
+            pubdate: raw.pubdate,
+            description: raw.description,
+            pic: raw.pic,
+            typename: raw.typename,
+            tid: raw.tid,
+            arcurl: raw.arcurl,
+        };
+        assert_eq!(v.kind, "cheese".to_string());
+        assert_eq!(v.ssid.as_deref(), Some("959815180"));
+        assert_eq!(v.bvid, None);
+    }
+
+    #[test]
+    fn classify_kind_handles_arcurl_variants() {
+        // 普通视频
+        assert_eq!(
+            classify_kind("https://www.bilibili.com/video/BV1abc"),
+            ("video".to_string(), None)
+        );
+        // cheese 课程
+        assert_eq!(
+            classify_kind("https://www.bilibili.com/cheese/play/ss12345"),
+            ("cheese".to_string(), Some("12345".into()))
+        );
+        // cheese 课程 + query string
+        assert_eq!(
+            classify_kind("https://www.bilibili.com/cheese/play/ss959815180?query_from=0&search_id=51911459"),
+            ("cheese".to_string(), Some("959815180".into()))
+        );
+        // cheese 课程 + fragment
+        assert_eq!(
+            classify_kind("https://www.bilibili.com/cheese/play/ss7#section"),
+            ("cheese".to_string(), Some("7".into()))
+        );
+        // 不识别 → 默认 video
+        assert_eq!(
+            classify_kind("https://example.com/other"),
+            ("video".to_string(), None)
+        );
     }
 
     #[test]
@@ -614,7 +735,7 @@ mod tests {
         let r = VideoResult {
             bvid: Some("BV1abc".into()),
             ssid: None,
-            kind: "video",
+            kind: "video".to_string(),
             title: String::new(),
             author: String::new(),
             mid: 0,
@@ -628,7 +749,7 @@ mod tests {
             tid: None,
             arcurl: "https://www.bilibili.com/video/BV1abc".into(),
         };
-        assert_eq!(r.kind, "video");
+        assert_eq!(r.kind, "video".to_string());
         assert_eq!(r.ssid, None);
     }
 
@@ -638,7 +759,7 @@ mod tests {
         let r = VideoResult {
             bvid: None,
             ssid: Some("959815180".into()),
-            kind: "cheese",
+            kind: "cheese".to_string(),
             title: String::new(),
             author: String::new(),
             mid: 0,
@@ -653,7 +774,7 @@ mod tests {
             arcurl:
                 "https://www.bilibili.com/cheese/play/ss959815180?query_from=0".into(),
         };
-        assert_eq!(r.kind, "cheese");
+        assert_eq!(r.kind, "cheese".to_string());
         assert_eq!(r.ssid.as_deref(), Some("959815180"));
     }
 }

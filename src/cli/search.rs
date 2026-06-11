@@ -80,6 +80,23 @@ pub async fn run(cmd: &Command, out: &Output) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Render the leftmost ID column of a search result row.
+///
+/// For regular videos we show the BV id. For cheese courses we
+/// synthesize `cheese:ss{N}` so the user can see at a glance that
+/// this is a course page (which is not directly downloadable via
+/// the BV-style playurl endpoint).
+fn render_id_column(r: &VideoResult) -> String {
+    match (r.kind.as_str(), r.bvid.as_deref(), r.ssid.as_deref()) {
+        ("cheese", _, Some(ss)) => format!("cheese:ss{}", ss),
+        (_, Some(bv), _) => bv.to_string(),
+        // Fallback: classify_kind is meant to guarantee one or the
+        // other, but if B 站 ever ships a row with neither we still
+        // want a stable 14-char display.
+        _ => "-".to_string(),
+    }
+}
+
 fn print_video_table(results: &[VideoResult], limit: Option<u32>, out: &Output) {
     let n = limit.unwrap_or(20) as usize;
     if results.is_empty() {
@@ -92,9 +109,10 @@ fn print_video_table(results: &[VideoResult], limit: Option<u32>, out: &Output) 
     ));
     for r in results.iter().take(n) {
         let dur = format_duration(r.duration_sec);
+        let id = render_id_column(r);
         out.status(&format!(
             "{:<14} {:<7} {:<8} {:<14} {}",
-            r.bvid, dur, format_count(r.play), truncate(&r.author, 13), truncate(&r.title, 60)
+            id, dur, format_count(r.play), truncate(&r.author, 13), truncate(&r.title, 60)
         ));
     }
     if results.len() > n {
@@ -169,5 +187,41 @@ mod tests {
         let s = "原神角色预告";
         assert_eq!(truncate(s, 100), s);
         assert_eq!(truncate(s, 3), "原神…");
+    }
+
+    fn fake_video_result(bvid: Option<&str>, ssid: Option<&str>, kind: &str) -> VideoResult {
+        VideoResult {
+            kind: kind.to_string(),
+            bvid: bvid.map(str::to_string),
+            ssid: ssid.map(str::to_string),
+            title: String::new(),
+            author: String::new(),
+            mid: 0,
+            duration: String::new(),
+            duration_sec: 0,
+            play: 0,
+            pubdate: 0,
+            description: String::new(),
+            pic: String::new(),
+            typename: String::new(),
+            tid: None,
+            arcurl: String::new(),
+        }
+    }
+
+    #[test]
+    fn render_id_column_video() {
+        let r = fake_video_result(Some("BV1abc"), None, "video");
+        assert_eq!(render_id_column(&r), "BV1abc");
+    }
+
+    #[test]
+    fn render_id_column_cheese() {
+        let r = fake_video_result(None, Some("959815180"), "cheese");
+        // "cheese:ss959815180" is exactly 18 chars — wider than the
+        // 14-char column, but we don't truncate (the user needs the
+        // full ss id to copy). The column will visually overflow
+        // for cheese rows; the alternative (truncating) hides data.
+        assert_eq!(render_id_column(&r), "cheese:ss959815180");
     }
 }
