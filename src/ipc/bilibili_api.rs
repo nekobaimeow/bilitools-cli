@@ -18,6 +18,9 @@ pub struct ResourceDescription {
     pub cover: Option<String>,
     pub duration: Option<f64>,
     pub pages: Vec<PageInfo>,
+    /// Numeric aid (for BV inputs, decoded from the view response).
+    /// Used by the playurl API which only accepts numeric aids.
+    pub aid: Option<i64>,
     /// Sub-resources (e.g. episodes of a season).
     pub children: Vec<ResourceDescription>,
     /// Raw upstream JSON, for callers that need more.
@@ -45,6 +48,8 @@ struct ViewData {
     pic: Option<String>,
     duration: Option<f64>,
     pages: Option<Vec<ViewPage>>,
+    aid: Option<i64>,
+    bvid: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -147,6 +152,7 @@ async fn describe_video(id: &str) -> Result<ResourceDescription, CliError> {
         cover: data.pic,
         duration: data.duration,
         pages,
+        aid: data.aid,
         children: Vec::new(),
         raw,
     })
@@ -179,6 +185,8 @@ async fn describe_season(id: &str) -> Result<ResourceDescription, CliError> {
                 duration: e.duration.map(|d| d as f64),
                 part: None,
             }],
+            aid: None,
+
             children: Vec::new(),
             raw: serde_json::Value::Null,
         })
@@ -190,6 +198,7 @@ async fn describe_season(id: &str) -> Result<ResourceDescription, CliError> {
         cover: result.cover,
         duration: None,
         pages: Vec::new(),
+        aid: None,
         children,
         raw: serde_json::Value::Null,
     })
@@ -238,6 +247,8 @@ async fn describe_favorite(fid: &str) -> Result<ResourceDescription, CliError> {
         cover: None,
         duration: None,
         pages: Vec::new(),
+        aid: None,
+
         children: Vec::new(),
         raw: body,
     })
@@ -260,6 +271,8 @@ async fn describe_watch_later() -> Result<ResourceDescription, CliError> {
         cover: None,
         duration: None,
         pages: Vec::new(),
+        aid: None,
+
         children: Vec::new(),
         raw: body,
     })
@@ -289,6 +302,8 @@ async fn describe_user(mid: &str) -> Result<ResourceDescription, CliError> {
         cover: None,
         duration: None,
         pages: Vec::new(),
+        aid: None,
+
         children: Vec::new(),
         raw: body,
     })
@@ -318,6 +333,8 @@ async fn describe_audio(auid: &str) -> Result<ResourceDescription, CliError> {
         cover: None,
         duration: None,
         pages: Vec::new(),
+        aid: None,
+
         children: Vec::new(),
         raw: body,
     })
@@ -341,6 +358,8 @@ async fn describe_collection(lid: &str) -> Result<ResourceDescription, CliError>
         cover: None,
         duration: None,
         pages: Vec::new(),
+        aid: None,
+
         children: Vec::new(),
         raw: body,
     })
@@ -372,6 +391,7 @@ mod tests {
             cover: None,
             duration: None,
             pages: vec![],
+            aid: None,
             children: vec![],
             raw: serde_json::Value::Null,
         };

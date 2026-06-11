@@ -22,6 +22,8 @@ pub async fn run(cmd: DownloadCmd, out: &Output) -> Result<(), CliError> {
         DownloadCmd::Resume { id } => cmd_resume(&id, out).await,
         DownloadCmd::Retry { id } => cmd_retry(&id, out).await,
         DownloadCmd::Open { id } => cmd_open(&id, out).await,
+        DownloadCmd::Run { id } => cmd_run(&id, out).await,
+        DownloadCmd::RunAll => cmd_run_all(out).await,
     }
 }
 
@@ -41,8 +43,10 @@ async fn cmd_submit(
     out: &Output,
 ) -> Result<(), CliError> {
     let res = parse(input)?;
-    // Verify the resource is reachable.
-    let _ = bilibili_api::describe(&res).await?;
+    // Verify the resource is reachable AND pull the metadata (title,
+    // cover, pages, available streams, …) so downstream code can act
+    // on the task without re-fetching.
+    let desc = bilibili_api::describe(&res).await?;
     let task = Task {
         id: uuid::Uuid::new_v4().to_string(),
         task_type: kind_to_task_type(res.kind),
@@ -53,6 +57,7 @@ async fn cmd_submit(
             "output_dir": output_dir,
             "quality": quality,
             "abr": abr,
+            "metadata": desc,
         }),
         status: TaskStatus::Pending,
         progress: 0.0,
@@ -221,4 +226,32 @@ async fn cmd_open(id: &str, _out: &Output) -> Result<(), CliError> {
     std::fs::create_dir_all(&out_dir).ok();
     crate::backends::http::open_path(&out_dir.to_string_lossy())?;
     Ok(())
+}
+
+async fn cmd_run(id: &str, out: &Output) -> Result<(), CliError> {
+    let result = crate::ipc::queue::run_task(id).await?;
+    out.ok(result)
+}
+
+async fn cmd_run_all(out: &Output) -> Result<(), CliError> {
+    let all = tasks::load().await?;
+    let mut results = Vec::new();
+    for t in all {
+        if matches!(
+            t.status,
+            TaskStatus::Pending | TaskStatus::Running | TaskStatus::Paused | TaskStatus::Failed
+        ) {
+            match crate::ipc::queue::run_task(&t.id).await {
+                Ok(r) => results.push(r),
+                Err(e) => results.push(crate::ipc::queue::RunResult {
+                    task_id: t.id.clone(),
+                    status: format!("error: {e}"),
+                    output: None,
+                    segments: vec![],
+                    resumed: false,
+                }),
+            }
+        }
+    }
+    out.ok(serde_json::json!({ "ran": results.len(), "results": results }))
 }

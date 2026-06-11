@@ -166,6 +166,11 @@ pub enum DownloadCmd {
     Retry { id: String },
     /// Open a task's output directory.
     Open { id: String },
+    /// Run a task: download missing segments and merge to mp4.
+    /// Resumable — re-run to continue a partial download.
+    Run { id: String },
+    /// Run all pending tasks sequentially.
+    RunAll,
 }
 
 #[derive(Subcommand, Debug)]

@@ -14,5 +14,6 @@ pub mod bilibili_api;
 pub mod login;
 pub mod aria2c;
 pub mod ffmpeg;
-pub mod queue;
 pub mod media;
+pub mod playurl;
+pub mod queue;

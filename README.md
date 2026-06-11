@@ -74,21 +74,35 @@ bilitools auth qrcode-poll <qrcode_key>
 ### 5. 解析 / 下载
 
 ```bash
-# 解析一个 BV 号
+# 解析一个 BV 号（不发请求，纯 URL 分类）
 bilitools parse bv BV1xx411c7mD
 
 # 解析一个番剧 SS 号
 bilitools parse url "https://www.bilibili.com/bangumi/play/ss28280"
 
-# 提交下载（写入数据库，还不会真正下载 — 实际下载逻辑在 Phase 3.7 移植后启用）
-bilitools download submit "https://www.bilibili.com/video/BV1xx411c7mD" --quality 80
+# 提交下载（写入数据库 + 拉取 view 元数据）
+bilitools download submit "https://www.bilibili.com/video/BV1xx411c7mD" --quality 80 --output-dir ~/Videos
+
+# 真下载 — 启动 aria2c RPC daemon + 下载 DASH 段 + ffmpeg 合并 mp4
+bilitools download run <task_id>
 
 # 列出所有任务
 bilitools download list
 
 # 取消
 bilitools download cancel <task_id>
+
+# 重试失败 / 已完成（会先看磁盘文件，aria2c 自动续传）
+bilitools download retry <task_id>
 ```
+
+**断点续传**：aria2c 启动时带 `--continue=true --check-integrity=true --max-tries=0`。
+如果某个分片（视频 / 音频 m4s）下载途中被杀，再 `bilitools download run` 同一 task，
+aria2c 会用 HTTP Range 请求把缺失的字节范围续上，最后 ffmpeg 合并成 mp4。
+
+E2E 验证（BV1ZvEt6oEWR 锐评 2026 数学高考，738 秒单 P）：
+- 完整下载：19 秒，~31 MB
+- 中断后重下（100 KB 残片）：7 秒，`resumed: true`，ffprobe 验证可播放
 
 ### 6. 配置
 
