@@ -69,6 +69,42 @@ pub enum Command {
     #[command(subcommand)]
     Config(ConfigCmd),
 
+    /// Search B 站 for videos, bangumi, or users.
+    Search {
+        /// Search keyword (e.g. "原神", "4K演示").
+        keyword: String,
+        /// Resource type: video, bangumi, user, article, audio, live, topic.
+        #[arg(long, short = 't', default_value = "video")]
+        r#type: String,
+        /// Page number (1-based).
+        #[arg(long, default_value = "1")]
+        page: u32,
+        /// Results per page.
+        #[arg(long, default_value = "20")]
+        page_size: u32,
+        /// Limit displayed rows in human mode.
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+
+    /// Fetch danmaku (XML or ASS) for a B 站 video.
+    Danmaku {
+        /// BV id, av id, or full URL.
+        input: String,
+        /// Output directory for the .xml / .ass files.
+        #[arg(long, short = 'o')]
+        output_dir: Option<std::path::PathBuf>,
+        /// Source: live, history, or both.
+        #[arg(long, short = 's', default_value = "live")]
+        source: String,
+        /// Output format: xml, ass, or both.
+        #[arg(long, short = 'f', default_value = "both")]
+        format: String,
+        /// Skip the "not logged in" warning.
+        #[arg(long)]
+        no_login_warn: bool,
+    },
+
     /// Cache management.
     #[command(subcommand)]
     Cache(CacheCmd),

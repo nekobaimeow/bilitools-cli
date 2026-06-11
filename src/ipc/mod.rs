@@ -17,3 +17,5 @@ pub mod ffmpeg;
 pub mod media;
 pub mod playurl;
 pub mod queue;
+pub mod search;
+pub mod danmaku;

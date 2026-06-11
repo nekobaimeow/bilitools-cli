@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod cache;
 pub mod config;
+pub mod danmaku;
 pub mod db;
 pub mod download;
 pub mod info;
@@ -12,3 +13,4 @@ pub mod parse;
 pub mod repl;
 pub mod root;
 pub mod schedule;
+pub mod search;
