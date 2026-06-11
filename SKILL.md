@@ -151,12 +151,18 @@ JSON files land as `{subtitle_id}.{lan}.json` in the output dir. B 站's body is
 ```bash
 bilitools audio BV1XBRuBSEd7 -o ~/Music/bili
 bilitools --json audio BV1CZEY67E8o -q 16  # 360P tier; audio bitrate chosen by B 站
+
+# Optional: also produce a local transcript (requires --features transcribe
+# at build time AND the external `sensevoice` CLI on PATH — see
+# "Audio Transcription" below).
+bilitools audio BV1XBRuBSEd7 --transcribe -o ~/podcast
+bilitools audio <bv> --transcribe --transcribe-language en --transcribe-device cuda
 ```
 
 - DASH audio segment → reqwest download (no aria2c overhead for single file) → ffmpeg
   `-vn -c:a copy` → `.m4a`.
 - Output: `{sanitize(title)}-{cid}.m4a`. Chinese chars become `_`; CID preserved for uniqueness.
-- Use case: offline listening, speech-to-text post-processing (Whisper, MiniMax, etc.).
+- Use case: offline listening, speech-to-text post-processing (Whisper, MiniMax, **sensevoice**, etc.).
 
 ### `download` — Full video download (DASH)
 
@@ -235,15 +241,30 @@ bilitools audio BV... -o ~/Music/podcast
 # Then in your podcast player, point at ~/Music/podcast
 ```
 
-### 3. Speech-to-text pipeline (Whisper / MiniMax)
+### 3. Speech-to-text pipeline (local, offline, no API key)
+
+bilitools integrates with [sensevoice-skill](https://github.com/nekobaimeow/sensevoice-skill),
+a one-shot Python CLI wrapping Alibaba's SenseVoiceSmall. RTF ~0.12 on CPU, 900 MB
+one-time model download, supports zh / yue / en / ja / ko.
 
 ```bash
-# Get audio
-bilitools audio BV... -o /tmp/stt
+# Step 0: install (one time) — Python deps + model
+pip install funasr numpy soundfile
+git clone https://github.com/nekobaimeow/sensevoice-skill
+# (puts a `sensevoice` script in the repo; either put it on PATH or pass
+#  --sensevoice-cli /full/path/to/sensevoice to bilitools)
 
-# Hand off to Whisper (CLI not bundled — use whichever you have)
-whisper /tmp/stt/*.m4a --model medium --language Chinese
+# Step 1: rebuild bilitools with the optional transcribe feature
+cargo install --path . --features transcribe
+
+# Step 2: download audio + transcribe in one shot
+bilitools audio BV1XBRuBSEd7 --transcribe -o ~/podcast
+#   → ~/podcast/<title>-<cid>.m4a         (audio)
+#   → ~/podcast/<title>-<cid>_文字稿.txt   (transcript, 4633 chars / 10min)
 ```
+
+For **other** ASR backends (whisper.cpp, MiniMax API, etc.), bilitools does not bundle them
+— feed the `.m4a` straight into your own tool.
 
 ### 4. Search → top 5 → save everything
 
@@ -272,6 +293,108 @@ bilitools harvest "TED 演讲" --limit 5 -o ./ted-batch
 - **Exit code**: `0` on success, `1` on any error. Some subcommands return `0` even with
   partial failures (e.g. `harvest` when some videos failed) — check `data.degraded[]`.
 
+## Audio Transcription (Optional)
+
+Optional local ASR via [sensevoice-skill](https://github.com/nekobaimeow/sensevoice-skill)
+— **Alibaba SenseVoiceSmall** model, CPU inference, no API key, no cloud upload.
+
+This is an **opt-in feature** to keep the default binary lean. Two conditions must
+be true simultaneously for it to work:
+
+1. **bilitools was built with `--features transcribe`**
+2. **The `sensevoice` script is on PATH** (or pass `--sensevoice-cli /path`)
+
+Without either, the user gets a clear error message at runtime — bilitools will
+**never** silently no-op.
+
+### Build
+
+```bash
+cargo install --path /path/to/bilitools-cli --features transcribe
+# or, from the repo:
+cargo build --release --features transcribe
+```
+
+The `transcribe` feature only pulls in a tiny `which` crate (~30 KB) for locating
+the `python3` and `sensevoice` executables. It does NOT bundle funasr / torch /
+the 900 MB model — those are installed in the **next** step.
+
+### Install sensevoice (one time)
+
+```bash
+pip install funasr numpy soundfile
+git clone https://github.com/nekobaimeow/sensevoice-skill
+cd sensevoice-skill && chmod +x sensevoice
+# Option A: put it on PATH
+sudo ln -s "$(pwd)/sensevoice" /usr/local/bin/sensevoice
+# Option B: pass full path each invocation (no PATH change)
+bilitools audio <bv> --transcribe --sensevoice-cli /full/path/to/sensevoice
+```
+
+First `sensevoice` run downloads `iic/SenseVoiceSmall` (~900 MB) from ModelScope.
+Subsequent runs use the cache at `~/.cache/modelscope/`.
+
+### Usage
+
+```bash
+# Download audio + transcribe in one shot
+bilitools audio BV1XBRuBSEd7 --transcribe -o ~/podcast
+
+# Language / device / tag options
+bilitools audio <bv> --transcribe --transcribe-language en
+bilitools audio <bv> --transcribe --transcribe-device cuda        # needs CUDA torch
+bilitools audio <bv> --transcribe --transcribe-keep-tags          # keep <|HAPPY|>
+
+# JSON output (transcript printed as a second JSON line — jq -s to combine)
+bilitools --json audio <bv> --transcribe | jq -s '.[0].audio + .[1].transcript'
+```
+
+### Flags (audio subcommand)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--transcribe` | off | Run sensevoice after the m4a is downloaded |
+| `--transcribe-language <zh\|yue\|en\|ja\|ko>` | `zh` | Language hint for ASR |
+| `--transcribe-device <cpu\|cuda>` | `cpu` | Inference device |
+| `--transcribe-keep-tags` | off | Keep `<|HAPPY|>` emotion tags in transcript |
+| `--sensevoice-cli <path>` | `which sensevoice` | Override the sensevoice script path |
+
+### Output
+
+A successful run produces two files in `-o`:
+
+- `<title>-<cid>.m4a` — the audio (unchanged from non-transcribe flow)
+- `<title>-<cid>_文字稿.txt` — Chinese-text-named transcript, one sentence per
+  line. With `--transcribe-keep-tags`, lines are prefixed with `<|zh|><|HAPPY|>` etc.
+
+### Performance (CPU, 14-core x86)
+
+| Audio | sensevoice wall time | RTF |
+|-------|---------------------|-----|
+| 10 min | ~100 s | 0.158 |
+| 22 min | ~160 s | 0.12 |
+| 60 min | ~7 min | 0.12 |
+
+### Common errors
+
+| Error message | Fix |
+|---------------|-----|
+| `python3 not found in PATH` | `sudo apt install python3` |
+| `the sensevoice CLI is not on PATH` | Install per instructions above |
+| `ModuleNotFoundError: No module named 'funasr'` | `pip install funasr numpy soundfile` |
+| `bilitools was built without the 'transcribe' feature` | `cargo install --path . --features transcribe` |
+| `sensevoice timed out after Ns` | First run downloads ~900 MB; raise timeout or be patient |
+
+### When to use sensevoice vs. alternatives
+
+- **sensevoice**: best for **Chinese** (zh / yue); very fast on CPU; fully offline.
+- **whisper.cpp / OpenAI Whisper**: better for **English-only** and high accuracy.
+- **Cloud API** (Deepgram, AssemblyAI, MiniMax ASR): best for low-latency streaming,
+  multilingual noise robustness, speaker diarization.
+
+bilitools only bundles the bilitools↔sensevoice integration. For Whisper / cloud,
+call those tools directly on the `.m4a` output.
+
 ## Known Pitfalls
 
 1. **WBI signing is required for `subtitle` and `playurl`.** These endpoints return 0
@@ -298,6 +421,11 @@ bilitools harvest "TED 演讲" --limit 5 -o ./ted-batch
 
 7. **Output file names** sanitize Chinese → `_` and truncate at 80 chars. The CID is
    always appended for uniqueness: `{slug}-{cid}.m4a`.
+
+8. **`--transcribe` requires two opt-ins.** The bilitools binary must be built with
+   `--features transcribe` AND the `sensevoice` Python CLI must be on PATH (or
+   passed via `--sensevoice-cli`). See "Audio Transcription" above. bilitools
+   will refuse with a clear error rather than silently no-op.
 
 ## Data Locations
 
@@ -335,6 +463,9 @@ bilitools --json auth status | jq '.data.cookies'
   re-encoding (smaller files, different codec), post-process with ffmpeg directly.
 - **Live streaming downloads** — `live` is in the search type list, but the live stream
   download path is not part of this CLI. Use a different tool.
+- **Real-time / streaming ASR** — the `audio --transcribe` flow is batch-only (you
+  wait for the whole audio to finish). For live captions or <100 ms latency,
+  use a streaming ASR tool directly.
 
 ## Source
 

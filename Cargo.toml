@@ -97,6 +97,21 @@ parking_lot = "0.12"
 bytes = "1"
 url = "2"
 
+# Optional — only used by the `transcribe` feature for finding
+# the `python3` and `sensevoice` executables on the user's PATH.
+which = { version = "7", optional = true }
+
+# Optional features — kept off by default to avoid bloat.
+# Each feature should NOT pull new runtime dependencies; the
+# `transcribe` feature only toggles code paths that shell out
+# to an external Python CLI (sensevoice-skill).
+[features]
+default = []
+# Enable `bilitools audio <bv> --transcribe` to transcribe downloaded
+# audio via the external `sensevoice` CLI (https://github.com/nekobaimeow/sensevoice-skill).
+# Build with: cargo build --release --features transcribe
+transcribe = ["dep:which"]
+
 [dev-dependencies]
 # Test utilities
 tempfile = "3"

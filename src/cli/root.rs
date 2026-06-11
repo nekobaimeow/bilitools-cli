@@ -177,6 +177,29 @@ pub enum Command {
         /// Audio bitrate is chosen by B 站 independently of this.
         #[arg(long, short = 'q', default_value = "80")]
         quality: u32,
+        /// Run local ASR after download using the external `sensevoice` CLI
+        /// (https://github.com/nekobaimeow/sensevoice-skill). Requires
+        /// building with `--features transcribe` AND `sensevoice` on PATH.
+        /// First run downloads ~900 MB SenseVoiceSmall model from ModelScope.
+        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
+        #[arg(long)]
+        transcribe: bool,
+        /// Language for ASR: zh | yue | en | ja | ko (default zh).
+        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
+        #[arg(long, default_value = "zh")]
+        transcribe_language: String,
+        /// Inference device: cpu | cuda (default cpu).
+        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
+        #[arg(long, default_value = "cpu")]
+        transcribe_device: String,
+        /// Keep emotion tags (<|HAPPY|> etc.) in the transcript.
+        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
+        #[arg(long)]
+        transcribe_keep_tags: bool,
+        /// Override path to the `sensevoice` script (default: which sensevoice).
+        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
+        #[arg(long)]
+        sensevoice_cli: Option<std::path::PathBuf>,
     },
 
     /// Cache management.

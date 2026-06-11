@@ -21,3 +21,10 @@ pub mod search;
 pub mod shared;
 pub mod storage;
 pub mod subtitle;
+/// Local ASR via external `sensevoice` CLI (Python + FunASR).
+///
+/// Build with `--features transcribe` to enable. The module is always
+/// present in source so the tree builds either way, but its real
+/// implementation is gated on the feature. With the feature off, calling
+/// `transcribe::transcribe(...)` returns a friendly error.
+pub mod transcribe;
