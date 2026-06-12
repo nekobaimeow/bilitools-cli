@@ -198,48 +198,48 @@ pub async fn run(
         cfg: &AdaptiveConfig,
     ) {
         tracing::trace!("[v3] call lo={} hi={} budget={} samples={}", lo, hi, budget, samples.len());
-        if lo > hi || *budget == 0 { return; }
+        if lo > hi || *budget == 0 { tracing::trace!("[v3] early return", ); return; }
         // OCR lo
         let (lo_path, lo_raws) = match ocr_frame(lo, cache, engine, video, frames_dir, cfg).await {
             Some(r) => r,
-            None => return,
+            None => { tracing::trace!("[v3] ocr_frame({}) failed", lo); return; }
         };
         *budget = budget.saturating_sub(1);
-        tracing::trace!("[v3]   OCR lo={} → raws={} (budget={})", lo, lo_raws.len(), budget);
+        tracing::trace!("[v3] OCR lo={} → raws={} (budget={})", lo, lo_raws.len(), budget);
         if lo_raws.is_empty() {
-            tracing::trace!("[v3]   lo={} empty, advance", lo);
+            tracing::trace!("[v3] lo={} empty, advance", lo);
             Box::pin(v3_recurse(lo + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             return;
         }
         let lo_text = primary_content_text(&lo_raws);
-        tracing::trace!("[v3]   lo_text=\", {}\"", lo_text);
+        tracing::trace!("[v3] lo_text=\", {}\"", lo_text);
         if lo_text.is_empty() {
-            tracing::trace!("[v3]   lo={} watermark-only, advance", lo);
+            tracing::trace!("[v3] lo={} watermark-only, advance", lo);
             Box::pin(v3_recurse(lo + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             return;
         }
         // OCR hi
         let (hi_path, hi_raws) = match ocr_frame(hi, cache, engine, video, frames_dir, cfg).await {
             Some(r) => r,
-            None => return,
+            None => { tracing::trace!("[v3] ocr_frame({}) failed", hi); return; }
         };
         *budget = budget.saturating_sub(1);
-        tracing::trace!("[v3]   OCR hi={} → raws={} (budget={})", hi, hi_raws.len(), budget);
+        tracing::trace!("[v3] OCR hi={} → raws={} (budget={})", hi, hi_raws.len(), budget);
         if hi_raws.is_empty() {
-            tracing::trace!("[v3]   hi={} empty, retreat", hi);
+            tracing::trace!("[v3] hi={} empty, retreat", hi);
             Box::pin(v3_recurse(lo, hi - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             return;
         }
         let hi_text = primary_content_text(&hi_raws);
-        tracing::trace!("[v3]   hi_text=\", {}\"", hi_text);
+        tracing::trace!("[v3] hi_text=\", {}\"", hi_text);
         if hi_text.is_empty() {
-            tracing::trace!("[v3]   hi={} watermark-only, retreat", hi);
+            tracing::trace!("[v3] hi={} watermark-only, retreat", hi);
             Box::pin(v3_recurse(lo, hi - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             return;
         }
         // Single element
         if lo == hi {
-            tracing::trace!("[v3]   lo==hi={} push sample", lo);
+            tracing::trace!("[v3] lo==hi={} push sample", lo);
             samples.push(AdaptiveSample {
                 frame: lo_path,
                 t_sec: lo as f32,
@@ -249,7 +249,7 @@ pub async fn run(
         }
         // Exit: lo_text == hi_text → whole window is one segment
         if lo_text == hi_text {
-            tracing::trace!("[v3]   lo_text==hi_text push [{}, {}]={}", lo, hi, lo_text);
+            tracing::trace!("[v3] lo_text==hi_text push [{}, {}]={}", lo, hi, lo_text);
             samples.push(AdaptiveSample {
                 frame: lo_path,
                 t_sec: lo as f32,
@@ -261,20 +261,20 @@ pub async fn run(
         let mid = (lo + hi) / 2;
         let (mid_path, mid_raws) = match ocr_frame(mid, cache, engine, video, frames_dir, cfg).await {
             Some(r) => r,
-            None => return,
+            None => { tracing::trace!("[v3] ocr_frame({}) failed", mid); return; }
         };
         *budget = budget.saturating_sub(1);
-        tracing::trace!("[v3]   OCR mid={} → raws={} (budget={})", mid, mid_raws.len(), budget);
+        tracing::trace!("[v3] OCR mid={} → raws={} (budget={})", mid, mid_raws.len(), budget);
         if mid_raws.is_empty() {
-            tracing::trace!("[v3]   mid={} empty, recurse both halves", mid);
+            tracing::trace!("[v3] mid={} empty, recurse both halves", mid);
             Box::pin(v3_recurse(lo, mid - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             Box::pin(v3_recurse(mid + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             return;
         }
         let mid_text = primary_content_text(&mid_raws);
-        tracing::trace!("[v3]   mid_text=\", {}\"", mid_text);
+        tracing::trace!("[v3] mid_text=\", {}\"", mid_text);
         if mid_text.is_empty() {
-            tracing::trace!("[v3]   mid={} watermark-only, recurse both halves", mid);
+            tracing::trace!("[v3] mid={} watermark-only, recurse both halves", mid);
             Box::pin(v3_recurse(lo, mid - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             Box::pin(v3_recurse(mid + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
             return;
@@ -360,29 +360,64 @@ pub fn is_meaningful_text(s: &str) -> bool {
 /// every detection in the frame is a watermark (e.g. the title card
 /// has not appeared yet), we return an empty string so the v3
 /// algorithm treats the frame as "no content text" and advances.
+/// The fingerprint of a frame's textual content, used by the v3
+/// recursive search to decide whether two frames "say the same
+/// thing".
+///
+/// **Design rationale.** Real B 站 videos have a persistent on-screen
+/// caption strip (e.g. a "配音：伤心欲茄" line that sits in the same
+/// cy position for the whole 118s of the video) PLUS transient
+/// dialogue subtitles that change every few seconds. If the v3
+/// algorithm's "is this frame the same as that frame?" test is
+/// "do they share the highest-confidence caption?", the persistent
+/// caption dominates and the algorithm exits after 2 OCR calls
+/// (lo=0, hi=118), missing every transient subtitle. v6 and v3
+/// (BV1zzEu6GEHW 别替我吹了) both fall into this trap.
+///
+/// The fix is to fingerprint by the WHOLE sorted detection list
+/// (excluding the watermark zone), not by a single highest-conf
+/// line. Two frames "say the same thing" only when they have
+/// identical text in the same vertical position. This way the
+/// persistent caption and the transient subtitle both contribute,
+/// and a single new dialogue line in the middle of the video
+/// forces a recursive split.
+///
+/// Watermark (top 15% of the frame) is stripped from the
+/// fingerprint because it persists across the whole video and
+/// would otherwise mask real content changes.
 fn primary_content_text(raws: &[RawDetection]) -> String {
     if raws.is_empty() {
         return String::new();
     }
     let frame_h: f32 = 720.0;
 
-    // Find the highest-confidence detection whose bbox center is NOT
-    // in the top 15% of the frame (the watermark zone).
-    let non_watermark = raws.iter()
-        .filter(|d| {
-            let cy = d.bbox.iter().map(|p| p[1]).sum::<f32>() / d.bbox.len() as f32;
-            cy > 0.15 * frame_h
-        })
-        .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal));
-
-    // If every detection in the frame is in the watermark zone, we
-    // return empty (NOT a fallback to the watermark) so the v3
-    // algorithm treats this frame as "no content text" and the
-    // recursion advances past it.
-    match non_watermark {
-        Some(d) => d.text.clone(),
-        None => String::new(),
+    // Build a "fingerprint" of the frame: every non-watermark
+    // detection, sorted by (cy, cx), text-joined with `\n`.
+    // This way a persistent caption (e.g. "配音：伤心欲茄") AND a
+    // transient subtitle (e.g. "这可是460斤的巨型鬼獒") BOTH
+    // contribute, and a single new subtitle forces a split.
+    let mut lines: Vec<(i32, i32, &str)> = Vec::new();
+    for d in raws {
+        let cy = (d.bbox.iter().map(|p| p[1]).sum::<f32>() / d.bbox.len() as f32) as i32;
+        let cx = (d.bbox.iter().map(|p| p[0]).sum::<f32>() / d.bbox.len() as f32) as i32;
+        if cy as f32 > 0.15 * frame_h {
+            lines.push((cy, cx, d.text.as_str()));
+        }
     }
+    lines.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let fp: String = lines
+        .into_iter()
+        .map(|(_, _, t)| t.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if fp.is_empty() {
+        // All detections are in the watermark zone. Return empty
+        // so the v3 algorithm treats the frame as "no content text"
+        // and advances (matches the user spec: "watermark = empty
+        // frame = move the window +1/-1").
+        return String::new();
+    }
+    fp
 }
 
 /// Are two detection clusters "basically the same"?
