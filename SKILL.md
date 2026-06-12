@@ -45,7 +45,8 @@ Tauri GUI layer was stripped.
 | Batch: top 5 黄金 results → danmaku + comments + subs | `bilitools harvest "黄金" --limit 5 -o ./out` |
 | Check login + sidecars | `bilitools doctor` |
 | Log in (QR code) | `bilitools auth qrcode -o qr.png` + `bilitools auth qrcode-poll <key>` |
-| **Analyze a video** (搜 → 元数据 → 弹幕/评论/字幕/音频转录) | see [standard workflow below](#analyzing-a-b-站-video-the-standard-看视频-workflow) |
+| **OCR** a screenshot or video frame (PP-OCRv5) | `bilitools ocr screenshot.png` / `bilitools ocr video.mp4 --video` (opt-in `--features ocr`) |
+| **Analyze a video** (搜 → 元数据 → 弹幕/评论/字幕/音频转录/OCR) | see [standard workflow below](#analyzing-a-b-站-video-the-standard-看视频-workflow) |
 
 All subcommands accept `--json` for machine-readable output. **Always prefer `--json` when
 this skill is being driven by another agent** (table output is for humans, JSON is stable).
@@ -292,6 +293,23 @@ bilitools --json audio BV... --transcribe -o /tmp/audio
 If the binary was NOT built with `--features transcribe`, OR `sensevoice` is missing,
 say so clearly and offer the user the `.m4a` path so they can run their own ASR.
 **Do not silently skip** — tell the user what you couldn't do and why.
+
+### Phase 2c — OCR (opt-in): hard-coded text in frames
+
+B 站's own subtitle pipeline misses a lot of visual text — title cards, watermarks,
+on-screen labels, in-frame Chinese/English, foreign-language text without audio, etc.
+`bilitools ocr` runs **PP-OCRv5 mobile (FP16, MNN backend)** fully offline to catch
+the rest. Requires the binary to be built with `--features ocr` AND MNN model files
+in `models/ocr-fast/`. See the **OCR subcommand** section below.
+
+Use OCR when:
+- subtitle came back empty AND audio has no useful speech
+- the user asks about on-screen text, watermarks, title cards, foreign captions
+- you want chapter titles from the video itself (e.g. 旅行 vlog 章节标题)
+
+Skip OCR when:
+- subtitle already covers the dialogue (don't duplicate work)
+- the user only cares about spoken content (audio transcription is enough)
 
 ### Phase 3 — Synthesize (this is the actual "watching")
 
@@ -573,6 +591,157 @@ call those tools directly on the `.m4a` output.
    foreign names are lossy. Treat transcripts as ~95% accurate, not 100%. If
    verbatim quoting matters, cross-check against the B 站 AI subtitles (which
    bilitools already harvests in `harvest`).
+
+## OCR (Optional — extract hard-coded text from images or video)
+
+Offline OCR via **PaddleOCR PP-OCRv5 mobile (FP16) + MNN** — the same model
+that ships with the rpic Windows image viewer (which we adapted and
+validated on B 站 video content). **Pure Rust, no Python process.**
+
+Use cases:
+
+- Video has no B 站 AI subtitle and no useful speech → OCR the on-screen
+  chapter titles / watermarks / title cards instead
+- Foreign-language video with on-screen translated text (e.g. 旅行 vlog with
+  English/Chinese overlay)
+- Screenshots you want to paste into a chat / search
+
+### Build
+
+```bash
+cargo install --path /path/to/bilitools-cli --features ocr
+# or, from the repo:
+cargo build --release --features ocr
+```
+
+The `ocr` feature pulls in:
+
+- `ocr-rs` (2.2.2) — Rust wrapper around the **MNN** inference engine
+- `imageproc` — needed because `ocr-rs::TextBox` exposes
+  `imageproc::rect::Rect` as a public field
+- MNN C++ runtime — compiled statically by `ocr-rs`'s build.rs (needs
+  `libclang-dev` to run bindgen at build time)
+
+Build-time prerequisite (one time):
+
+```bash
+sudo apt install libclang-dev clang   # Debian/Ubuntu
+brew install llvm                    # macOS
+choco install llvm                   # Windows
+```
+
+### Install OCR models (one time)
+
+Three MNN model files, **10.4 MB total**:
+
+```bash
+mkdir -p models/ocr-fast
+# Recommended FP16 (fastest, ~10 MB):
+#   PP-OCRv5_mobile_det_fp16.mnn
+#   PP-OCRv5_mobile_rec_fp16.mnn
+#   ppocr_keys_v5.txt
+#
+# These are NOT committed to git. Download from the project's
+# GitHub Release tarball, or place them manually.
+
+# Or override the location with an env var:
+export BILITOOLS_OCR_MODEL_DIR=/path/to/models/ocr-fast
+```
+
+Search order at runtime:
+
+1. `$BILITOOLS_OCR_MODEL_DIR`
+2. `<exe-dir>/models/ocr-fast/`
+3. `<exe-dir>/`
+4. `./models/ocr-fast/`
+5. `./`
+
+### Usage
+
+```bash
+# Image OCR
+bilitools ocr screenshot.png
+bilitools --json ocr screenshot.png -o ./out
+
+# Video OCR (extracts frames via ffmpeg, then OCRs each)
+bilitools ocr video.mp4 --video --interval 1.0
+bilitools ocr video.mp4 --video --interval 30 --max-frames 5
+bilitools --json ocr video.mp4 --video -o ./out
+
+# B 站 BV workflow: download the video first, then OCR it
+bilitools download submit BV1XBRuBSEd7 -o ./bv
+bilitools download run <task_id>
+bilitools ocr ./bv/<title>-<cid>.mp4 --video --interval 30 -o ./ocr
+```
+
+### Flags (ocr subcommand)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INPUT` | — | Image file, or (with `--video`) a local video file |
+| `--video` | off | Treat `INPUT` as a video and run ffmpeg frame extraction first |
+| `--interval <seconds>` | `1.0` | Seconds between sampled frames (video mode) |
+| `--max-frames <N>` | `200` | Hard cap on frames OCR'd from a video |
+| `--min-conf <0..1>` | `0.45` | Drop detections below this confidence |
+| `-o, --output-dir <path>` | `./ocr_out/<unix-ts>/` | Where to write `ocr.json` and (optionally) frames |
+| `--keep-frames` | off | Keep extracted frames on disk after OCR (default: delete) |
+
+### Output
+
+A single `ocr.json` written to `-o`:
+
+```json
+{
+  "mode": "video",
+  "input": "video.mp4",
+  "video_path": "/abs/path/video.mp4",
+  "frames_processed": 5,
+  "interval_sec": 30.0,
+  "detections": [
+    {
+      "t_sec": 0.0,
+      "text": "桂林雨中游湖",
+      "confidence": 1.0,
+      "bbox": [[775, 877], [1143, 877], [1143, 959], [775, 959]]
+    },
+    {
+      "t_sec": 30.0,
+      "text": "遇龙河竹筏游大暴雨淋成落汤鸡",
+      "confidence": 1.0,
+      "bbox": [[449, 893], [1473, 893], ...]
+    }
+  ]
+}
+```
+
+Image mode is the same shape minus the `t_sec` / `video_path` fields.
+
+### Performance (CPU)
+
+PP-OCRv5 mobile on a 1920×1080 frame: **~1.5 s/frame** on the WSL sandbox
+(12 vCPU). A 2-hour video at `--interval 1.0` = 7200 frames = ~3 hours wall
+time — tune `--interval` to taste. The engine caps at 3 threads by default;
+override with `BILITOOLS_OCR_THREADS`.
+
+### Common errors
+
+| Error message | Fix |
+|---------------|-----|
+| `bilitools: 'ocr' was not a subcommand` | binary was built without `--features ocr` |
+| `OCR model files not found` | install the three MNN files per above |
+| `ffmpeg not found in PATH` | `sudo apt install ffmpeg` |
+| `libclang not found` at build time | `sudo apt install libclang-dev clang` |
+| `unresolved import \`ocr_rs\`` | rebuild with `cargo build --release --features ocr` |
+
+### Known limitations (rpic-validated)
+
+- **Small text** (< ~16 px equivalent) — high miss rate. E.g. the small
+  "bilibili" watermark in the top-right of B 站 videos usually gets merged
+  into "blbi" or dropped. **Main titles and chapter cards work great**
+  (confidence 0.98–1.00 on the v1 风景旅行收藏家 video we tested).
+- **Extreme font effects** (neon, shadow, glow) — confidence drops but
+  text is still usually correct
+- **Reflections / glare** — 100% miss
 
 ## Data Locations
 
