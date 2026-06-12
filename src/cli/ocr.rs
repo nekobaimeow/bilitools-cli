@@ -21,6 +21,8 @@ pub async fn run(cmd: &Command, out: &Output) -> Result<(), CliError> {
         min_conf,
         output_dir,
         keep_frames,
+        dedup_window,
+        dedup_iou,
     } = cmd
     else {
         return Err(CliError::Other("internal: not Ocr command".into()));
@@ -44,6 +46,8 @@ pub async fn run(cmd: &Command, out: &Output) -> Result<(), CliError> {
             *min_conf,
             &output_dir,
             *keep_frames,
+            *dedup_window,
+            *dedup_iou,
             &engine,
             out,
         )
@@ -106,6 +110,8 @@ async fn run_video(
     min_conf: f32,
     output_dir: &PathBuf,
     keep_frames: bool,
+    dedup_window: f32,
+    dedup_iou: f32,
     engine: &crate::ipc::ocr::engine::OcrEngine,
     out: &Output,
 ) -> Result<(), CliError> {
@@ -125,7 +131,10 @@ async fn run_video(
         max_frames
     ));
 
-    let mut all: Vec<serde_json::Value> = Vec::new();
+    // Collect raw detections, capturing the first frame's dimensions so
+    // the dedup classifier can decide which corner / band a bbox lives in.
+    let mut raws: Vec<crate::ipc::ocr::dedup::RawDetection> = Vec::new();
+    let mut frame_size: (f32, f32) = (1920.0, 1080.0);
     for (i, frame) in extract.frames.iter().enumerate() {
         // Frame index `i` was extracted at `i * interval_sec` seconds
         // because ffmpeg's `fps=1/interval` filter produces a fixed
@@ -133,15 +142,18 @@ async fn run_video(
         let ts = (i as f32) * interval;
         let img = image::open(frame)
             .map_err(|e| CliError::Other(format!("open {}: {e}", frame.display())))?;
+        if i == 0 {
+            frame_size = (img.width() as f32, img.height() as f32);
+        }
         let detections = engine.recognize(&img).map_err(CliError::Other)?;
         for d in detections {
             if d.confidence >= min_conf {
-                all.push(serde_json::json!({
-                    "t_sec": ts,
-                    "text": d.text,
-                    "confidence": d.confidence,
-                    "bbox": d.bbox,
-                }));
+                raws.push(crate::ipc::ocr::dedup::RawDetection {
+                    t_sec: ts,
+                    text: d.text,
+                    confidence: d.confidence,
+                    bbox: d.bbox,
+                });
             }
         }
         if i % 10 == 0 {
@@ -158,13 +170,49 @@ async fn run_video(
         let _ = std::fs::remove_dir_all(&frames_dir);
     }
 
+    // Spatial-temporal dedup. window_sec=0 disables dedup.
+    let n_raw = raws.len();
+    let merged = if dedup_window > 0.0 {
+        let cfg = crate::ipc::ocr::dedup::DedupConfig {
+            window_sec: dedup_window,
+            iou_thresh: dedup_iou,
+            text_sim_thresh: 0.5,
+            frame_size,
+            video_duration_sec: extract.frames.len() as f32 * interval,
+        };
+        crate::ipc::ocr::dedup::merge(&raws, &cfg)
+    } else {
+        // No dedup — wrap each raw as a single-frame MergedDetection
+        // so the output shape stays consistent.
+        raws.iter()
+            .map(|r| crate::ipc::ocr::dedup::MergedDetection {
+                text: r.text.clone(),
+                first_t: r.t_sec,
+                last_t: r.t_sec,
+                n_frames: 1,
+                best_conf: r.confidence,
+                avg_conf: r.confidence,
+                bbox: r.bbox,
+                category: "raw",
+            })
+            .collect()
+    };
+    let n_merged = merged.len();
+
     let result = serde_json::json!({
         "mode": "video",
         "input": input,
         "video_path": video_path.to_string_lossy(),
         "frames_processed": extract.frames.len(),
         "interval_sec": interval,
-        "detections": all,
+        "dedup": {
+            "enabled": dedup_window > 0.0,
+            "raw_count": n_raw,
+            "merged_count": n_merged,
+            "window_sec": dedup_window,
+            "iou_thresh": dedup_iou,
+        },
+        "detections": merged,
     });
 
     let json_path = output_dir.join("ocr.json");
@@ -175,16 +223,22 @@ async fn run_video(
         out.ok(result)?;
     } else {
         out.status(&format!(
-            "OCR done: {} detections across {} frames",
-            all.len(),
-            extract.frames.len()
+            "OCR done: {} raw detections → {} merged (window {}s, iou {})",
+            n_raw, n_merged, dedup_window, dedup_iou
         ));
-        for d in &all {
+        for d in &merged {
+            let span = if d.first_t == d.last_t {
+                format!("{:>6.1}s", d.first_t)
+            } else {
+                format!("{:>6.1}-{:>6.1}s", d.first_t, d.last_t)
+            };
             out.status(&format!(
-                "  [{:>6.1}s] ({:.2}) {}",
-                d["t_sec"].as_f64().unwrap_or(0.0),
-                d["confidence"].as_f64().unwrap_or(0.0),
-                d["text"].as_str().unwrap_or("")
+                "  [{}] ({:.2}, ×{}) {:>10}  {}",
+                span,
+                d.best_conf,
+                d.n_frames,
+                d.category,
+                d.text
             ));
         }
         out.status(&format!("wrote {}", json_path.display()));

@@ -236,6 +236,15 @@ pub enum Command {
         /// Keep extracted frames on disk after OCR (default: delete).
         #[arg(long)]
         keep_frames: bool,
+        /// Dedup window in seconds. Raw detections in the same spatial
+        /// region with similar text within this window are merged into
+        /// one record (default: 3.0). Set to 0 to disable dedup.
+        #[arg(long, default_value = "3.0")]
+        dedup_window: f32,
+        /// Bbox IoU threshold for "same spatial region" during dedup
+        /// (default: 0.6). Lower = stricter (fewer merges).
+        #[arg(long, default_value = "0.6")]
+        dedup_iou: f32,
     },
 
     /// Cache management.

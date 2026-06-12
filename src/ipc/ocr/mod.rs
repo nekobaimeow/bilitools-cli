@@ -23,3 +23,5 @@ pub mod engine;
 pub mod frames;
 #[cfg(feature = "ocr")]
 pub mod model_paths;
+#[cfg(feature = "ocr")]
+pub mod dedup;
