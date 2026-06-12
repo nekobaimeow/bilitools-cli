@@ -346,6 +346,25 @@ mod tests {
     /// This is a pure function — we test the decision logic without
     /// needing ffmpeg/ocr-rs. The real `run_v2` will be a wrapper that
     /// calls this and performs the actual OCR.
+    ///
+    /// Algorithm (BFS + post-sort dedup-stop, the v2 form of the
+    /// user-described "split into two sub-tasks if left ≈ right, stop"):
+    ///
+    ///   work queue = [(0, duration)]   (FIFO)
+    ///   while work not empty AND calls < max:
+    ///     (lo, hi) = work.pop_front()
+    ///     if hi - lo < min_seg: continue
+    ///     t_mid = (lo + hi) / 2
+    ///     mid_text = ocr(mid)
+    ///     if noise: continue
+    ///     results.push((mid, mid_text))
+    ///     if mid - lo >= min_seg: work.push_back((lo, mid))
+    ///     if hi - mid >= min_seg: work.push_back((mid, hi))
+    ///
+    ///   # post: sort by time, then collapse adjacent identical text
+    ///   # (this is the "stop if left ≈ right" pass, applied to the
+    ///   # time-sorted sequence so it correctly pairs consecutive
+    ///   # frames in chronological order)
     fn v2_decide(
         spec: &HashMap<i32, String>,
         lo: f32,
@@ -353,54 +372,80 @@ mod tests {
         min_seg: f32,
         max_calls: u32,
     ) -> Vec<(f32, String)> {
-        let mut results = vec![];
+        let mut results: Vec<(f32, String)> = vec![];
         let mut calls_made: u32 = 0;
-        let mut work = vec![(lo, hi)];
+        let mut work: std::collections::VecDeque<(f32, f32)> = std::collections::VecDeque::new();
+        work.push_back((lo, hi));
 
-        // OCR helper: returns text at t_sec (or "" if not in spec / noise)
-        let ocr_at = |t: f32| -> String {
+        let ocr_at = |t: f32, spec: &HashMap<i32, String>| -> String {
             let key = t.round() as i32;
             spec.get(&key).cloned().unwrap_or_default()
         };
 
-        while let Some((lo, hi)) = work.pop() {
+        // Phase 1: BFS — split every range, OCR each mid. min_seg is
+        // the *minimum OCR step*; ranges smaller than min_seg would
+        // give us duplicate or near-duplicate OCR results, so we
+        // stop splitting there. We always OCR the mid of a range, and
+        // the very first iteration also OCRs the start so the leftmost
+        // frame isn't dropped (BFS recursing from (0, 1.75) only
+        // reaches mid=0.875, never 0 itself).
+        // Boundary OCR: always OCR t=lo once at the start
+        calls_made += 1;
+        let lo_text = ocr_at(lo, spec);
+        if !lo_text.is_empty() { results.push((lo, lo_text)); }
+        // Also OCR the endpoint (hi-eps) for symmetry
+        calls_made += 1;
+        let hi_text = ocr_at(hi, spec);
+        if !hi_text.is_empty() { results.push((hi, hi_text)); }
+
+        work.push_back((lo, hi));
+        while let Some((lo, hi)) = work.pop_front() {
             if calls_made >= max_calls { break; }
-            if hi - lo < min_seg { continue; }
+            if hi - lo <= min_seg { continue; }
             let mid = (lo + hi) * 0.5;
             calls_made += 1;
-            let mid_text = ocr_at(mid);
-
+            let mid_text = ocr_at(mid, spec);
             if mid_text.is_empty() {
-                // No text in this frame; whole range is text-free
+                // Mid frame is empty — DON'T assume the whole range is
+                // text-free (a subtitle could be just outside the mid).
+                // Split into halves and recurse; if both halves are also
+                // empty, the recursion will terminate naturally.
+                if mid - lo > min_seg { work.push_back((lo, mid)); }
+                if hi - mid > min_seg { work.push_back((mid, hi)); }
                 continue;
             }
+            results.push((mid, mid_text));
+            // Always push both halves if they exceed the min_seg floor.
+            // The "min_seg" check is the SPLIT decision, not the OCR
+            // decision — we already OCR the mid of [lo, hi], so we
+            // might as well recurse into the halves and OCR their mids
+            // too, even if a half is exactly min_seg wide.
+            if mid - lo >= min_seg { work.push_back((lo, mid)); }
+            if hi - mid >= min_seg { work.push_back((mid, hi)); }
+        }
 
-            // Real-time dedup: is mid_text the same as the last result?
-            if let Some((_, prev_text)) = results.last() {
-                if prev_text == &mid_text {
-                    // Same segment as previous; advance lo (left+1)
-                    // Don't push a new result; don't recurse into left
-                    // (we already know the left half is "the same")
-                    // But still recurse into right (might have new content)
-                    if mid < hi - min_seg {
-                        work.push((mid, hi));
-                    }
+        // Phase 2: sort by time (BFS order isn't strictly time-sequential)
+        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Phase 3: dedup-stop pass — collapse adjacent identical text
+        // into a single entry (the LAST occurrence, which is the
+        // representative time of the segment)
+        let mut deduped: Vec<(f32, String)> = vec![];
+        for (t, text) in results {
+            if let Some((_, prev)) = deduped.last_mut() {
+                if prev == &text {
+                    // Same text as previous; replace with later time
+                    // (more representative of "end of segment")
+                    *prev = text;
+                    // update time of last entry
+                    let last_idx = deduped.len() - 1;
+                    deduped[last_idx].0 = t;
                     continue;
                 }
             }
-
-            // New independent segment
-            results.push((mid, mid_text.clone()));
-
-            // Recurse into both halves
-            if mid - lo >= min_seg {
-                work.push((lo, mid));
-            }
-            if hi - mid >= min_seg {
-                work.push((mid, hi));
-            }
+            deduped.push((t, text));
         }
-        results
+        deduped
     }
 
     #[test]
