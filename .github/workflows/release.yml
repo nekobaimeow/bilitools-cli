@@ -168,10 +168,19 @@ jobs:
           # Copy README + LICENSE so the archive is self-contained
           cp README.md "dist/$NAME/README.md" 2>/dev/null || true
           cp LICENSE "dist/$NAME/LICENSE" 2>/dev/null || true
-          # For OCR builds, also bundle a README explaining model placement
-          if [ -n "${{ matrix.features }}" ] && [ -f models/ocr-fast/README.md ]; then
-            mkdir -p "dist/$NAME/models/ocr-fast"
-            cp models/ocr-fast/README.md "dist/$NAME/models/ocr-fast/README.md"
+          # For OCR builds, bundle the actual MNN model files (committed
+          # to git) so the released binary is fully self-contained and
+          # zero-config. Without this the user has to manually fetch the
+          # 10.4 MB of models before `bilitools ocr` will work.
+          if [ -n "${{ matrix.features }}" ]; then
+            if [ -d models/ocr-fast ]; then
+              mkdir -p "dist/$NAME/models/ocr-fast"
+              # Copy everything in models/ocr-fast/ (PP-OCRv5 det/rec MNN
+              # + charset txt). Skip the inner .gitignore if any.
+              cp -r models/ocr-fast/. "dist/$NAME/models/ocr-fast/"
+            else
+              echo "::warning::models/ocr-fast/ not found at $(pwd) — OCR builds will fail at runtime"
+            fi
           fi
           cd dist
           case "${{ matrix.archive }}" in

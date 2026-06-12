@@ -630,31 +630,34 @@ brew install llvm                    # macOS
 choco install llvm                   # Windows
 ```
 
-### Install OCR models (one time)
+### Install OCR models (zero-config since v1.4.7-cli.7)
 
-Three MNN model files, **10.4 MB total**:
+The three MNN model files are **committed to the repository** under
+`models/ocr-fast/` (10.4 MB total) and bundled into every release archive
+under `models/ocr-fast/`. **No setup is required for users who install
+from a release tarball or build from a fresh clone.**
 
-```bash
-mkdir -p models/ocr-fast
-# Recommended FP16 (fastest, ~10 MB):
-#   PP-OCRv5_mobile_det_fp16.mnn
-#   PP-OCRv5_mobile_rec_fp16.mnn
-#   ppocr_keys_v5.txt
-#
-# These are NOT committed to git. Download from the project's
-# GitHub Release tarball, or place them manually.
-
-# Or override the location with an env var:
-export BILITOOLS_OCR_MODEL_DIR=/path/to/models/ocr-fast
-```
-
-Search order at runtime:
+Search order at runtime (first match wins):
 
 1. `$BILITOOLS_OCR_MODEL_DIR`
 2. `<exe-dir>/models/ocr-fast/`
 3. `<exe-dir>/`
 4. `./models/ocr-fast/`
 5. `./`
+
+If you want to override the bundled models (e.g. for a custom-trained
+charset), drop the three files into a directory of your choice and point
+`BILITOOLS_OCR_MODEL_DIR` at it:
+
+```bash
+export BILITOOLS_OCR_MODEL_DIR=/path/to/models/ocr-fast
+```
+
+Required filenames inside that directory:
+
+- `PP-OCRv5_mobile_det_fp16.mnn` (2.4 MB — text detection)
+- `PP-OCRv5_mobile_rec_fp16.mnn` (8.4 MB — text recognition)
+- `ppocr_keys_v5.txt` (74 KB — character dictionary)
 
 ### Usage
 
