@@ -28,3 +28,11 @@ pub mod subtitle;
 /// implementation is gated on the feature. With the feature off, calling
 /// `transcribe::transcribe(...)` returns a friendly error.
 pub mod transcribe;
+/// Offline OCR via PaddleOCR + MNN (PP-OCRv5 mobile).
+///
+/// Build with `--features ocr` to enable. The module is always present
+/// in source so the tree builds either way, but its real implementation
+/// is gated on the feature. With the feature off, calling
+/// `ocr::run_ocr(...)` returns a friendly error pointing at the missing
+/// feature flag.
+pub mod ocr;
