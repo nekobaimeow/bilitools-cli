@@ -95,19 +95,39 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Build release binary
+      - name: Install libclang (Linux OCR)
+        if: matrix.features == 'ocr' && matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install -y libclang-dev clang
+
+      - name: Install libclang (macOS OCR)
+        if: matrix.features == 'ocr' && matrix.os == 'macos-latest'
+        run: brew install llvm
+        # ocr-rs 2.2.2 needs libclang at bindgen time. PATH adjustment so
+        # bindgen finds Homebrew's llvm. /opt/homebrew/bin on Apple Silicon,
+        # /usr/local/bin on Intel macs — both on Homebrew's default $PATH.
+
+      - name: Install libclang (Windows OCR)
+        if: matrix.features == 'ocr' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: choco install llvm -y --no-progress
+
+      - name: Build release binary (default)
+        if: matrix.features == ''
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build release binary (with ocr)
+        if: matrix.features == 'ocr'
+        # macOS Homebrew's llvm is keg-only; prepend its bin dir to PATH so
+        # bindgen can locate llvm-config during the build.
         run: |
-          if [ -n "${{ matrix.features }}" ]; then
-            # ocr-rs needs libclang for bindgen; install on Unix, choco on Windows
-            if [ "${{ matrix.os }}" = "windows-latest" ]; then
-              choco install llvm -y --no-progress --source=''
-            else
-              sudo apt-get install -y libclang-dev clang
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            if [ -d /opt/homebrew/opt/llvm/bin ]; then
+              echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+            elif [ -d /usr/local/opt/llvm/bin ]; then
+              echo "/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
             fi
-            cargo build --release --locked --target ${{ matrix.target }} --features "${{ matrix.features }}"
-          else
-            cargo build --release --locked --target ${{ matrix.target }}
           fi
+          cargo build --release --locked --target ${{ matrix.target }} --features ocr
 
       - name: Locate binary
         id: locate
