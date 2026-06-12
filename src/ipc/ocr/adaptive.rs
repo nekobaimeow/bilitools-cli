@@ -75,6 +75,24 @@ pub struct AdaptiveSample {
 
 /// Run the adaptive sampler. Returns samples in time order with the
 /// dedup-stop pass already applied.
+///
+/// Implements the user-described v3 algorithm: two-pointer binary
+/// search with lazy OCR. The 1s-frame sampling is the information-
+/// complete baseline; v3 minimizes OCR calls by skipping frames
+/// whose text is identical to a neighbor (a coherent watermark or
+/// chapter title only needs to be OCR'd once, not 60 times).
+///
+/// Algorithm:
+///   1. start with the 1s-frame array [0..duration]
+///   2. recursive search: lo/hi on the frame index axis
+///   3. if lo_text == hi_text → whole window is one segment, exit
+///   4. otherwise OCR the mid, compare with lo and hi, recurse into
+///      the independent halves
+///   5. post-pass: collapse adjacent same-text segments
+///
+/// Worst case: full 1s-frame sampling (every frame is unique, every
+/// OCR call is needed). Best case: 2 OCR calls (a watermark video
+/// where lo and hi are already identical).
 pub async fn run(
     engine: &OcrEngine,
     video: &Path,
@@ -82,102 +100,177 @@ pub async fn run(
     duration_sec: f32,
     cfg: &AdaptiveConfig,
 ) -> Vec<AdaptiveSample> {
+    // Lazy OCR cache: frame_index → Vec<RawDetection>
+    // We cache both the frame path AND the OCR result, so the second
+    // time the algorithm recurses to the same frame index we don't
+    // re-extract or re-OCR.
+    use std::collections::HashMap;
+    let mut ocr_cache: HashMap<i32, (PathBuf, Vec<RawDetection>)> = HashMap::new();
     let mut samples: Vec<AdaptiveSample> = Vec::new();
-    let mut budget = cfg.max_ocr_calls;
+    let mut budget_remaining = cfg.max_ocr_calls;
 
-    // BFS work queue: (t_start, t_end). Using VecDeque as a FIFO
-    // queue so we process ranges in BREADTH-FIRST order. This
-    // matters: with a plain Vec used as a stack (LIFO), a video
-    // that has text in the right half (e.g. chapter titles spread
-    // out evenly) would keep splitting the right half recursively
-    // and starve the left half entirely. BFS guarantees both halves
-    // get explored at each depth before we recurse deeper.
-    use std::collections::VecDeque;
-    let mut queue: VecDeque<(f32, f32)> = VecDeque::new();
-    queue.push_back((0.0, duration_sec));
+    // Total frame count (1s sampling)
+    let last_frame = (duration_sec.floor() as i32).max(0);
 
-    while let Some((t_start, t_end)) = queue.pop_front() {
-        tracing::info!("queue pop [{}, {}], budget={}, samples={}", t_start, t_end, budget, samples.len());
-        if budget == 0 {
-            tracing::warn!("OCR budget exhausted after {} samples", samples.len());
-            break;
+    // Lazy OCR helper: extract frame at frame_index, run OCR, cache
+    // result. Returns None if extraction or OCR fails, or budget is
+    // exhausted.
+    async fn ocr_frame(
+        idx: i32,
+        cache: &mut HashMap<i32, (PathBuf, Vec<RawDetection>)>,
+        budget: &mut u32,
+        engine: &OcrEngine,
+        video: &Path,
+        frames_dir: &Path,
+        cfg: &AdaptiveConfig,
+    ) -> Option<(PathBuf, Vec<RawDetection>)> {
+        if let Some(cached) = cache.get(&idx) {
+            return Some(cached.clone());
         }
-        let span = t_end - t_start;
-        if span < cfg.min_segment_sec {
-            continue;
+        if *budget == 0 {
+            return None;
         }
-        let t_mid = (t_start + t_end) * 0.5;
-
-        // ---- OCR the midpoint frame ----
-        let frame = match frames::extract_single_frame(video, frames_dir, t_mid).await {
+        *budget -= 1;
+        let t_sec = idx as f32;
+        let frame_path = match frames::extract_single_frame(video, frames_dir, t_sec).await {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("extract_single_frame({t_mid:.2}s) failed: {e}");
-                continue;
+                tracing::warn!("extract_single_frame({t_sec:.2}s) failed: {e}");
+                cache.insert(idx, (PathBuf::new(), vec![]));
+                return None;
             }
         };
-        let img: DynamicImage = match image::open(&frame) {
+        let img = match image::open(&frame_path) {
             Ok(i) => i,
             Err(e) => {
-                tracing::warn!("open {} failed: {e}", frame.display());
-                continue;
+                tracing::warn!("open {} failed: {e}", frame_path.display());
+                cache.insert(idx, (frame_path, vec![]));
+                return None;
             }
         };
         let dets = match engine.recognize(&img) {
             Ok(d) => d,
             Err(e) => {
-                tracing::warn!("ocr at {t_mid:.2}s failed: {e}");
-                continue;
+                tracing::warn!("ocr at {t_sec:.2}s failed: {e}");
+                cache.insert(idx, (frame_path, vec![]));
+                return None;
             }
         };
-        budget = budget.saturating_sub(1);
-
         let raws: Vec<RawDetection> = dets
             .into_iter()
             .filter(|d| d.confidence >= cfg.min_conf)
             .map(|d| RawDetection {
-                t_sec: t_mid,
+                t_sec,
                 text: d.text,
                 confidence: d.confidence,
                 bbox: d.bbox,
             })
-            .collect();
-
-        // Filter OCR noise: single Latin glyphs, empty strings.
-        let valid: Vec<RawDetection> = raws
-            .iter()
             .filter(|r| is_meaningful_text(&r.text))
-            .cloned()
             .collect();
-
-        if valid.is_empty() {
-            // No readable text in this frame → assume the whole range
-            // [t_start, t_end] is text-free. Don't split further.
-            continue;
-        }
-
-        samples.push(AdaptiveSample {
-            frame,
-            t_sec: t_mid,
-            raws: valid,
-        });
-
-        tracing::info!("OCR @ {:.2}s had valid text → split (span {:.1}s)", t_mid, span);
-
-        // Split the range and enqueue both halves. The half-span must
-        // be >= min_segment_sec for the recursion to do anything
-        // useful. We push LEFT first, then RIGHT, so the FIFO queue
-        // pops LEFT before RIGHT (matches the user's spec: "take
-        // the midpoint, then recurse into [left, mid] and [mid,
-        // right] — if [left, mid] is the same, drop it").
-        if span * 0.5 >= cfg.min_segment_sec {
-            queue.push_back((t_start, t_mid));
-            queue.push_back((t_mid, t_end));
-            tracing::info!("  enqueued [{}, {}] + [{}, {}]; queue.len={}", t_start, t_mid, t_mid, t_end, queue.len());
-        } else {
-            tracing::info!("  half-span {:.2}s < min_segment {:.2}s → no split", span * 0.5, cfg.min_segment_sec);
-        }
+        let result = (frame_path, raws);
+        cache.insert(idx, result.clone());
+        Some(result)
     }
+
+    // v3 internal recursion (async version using async closure for ocr_frame)
+    async fn v3_recurse(
+        lo: i32,
+        hi: i32,
+        cache: &mut HashMap<i32, (PathBuf, Vec<RawDetection>)>,
+        samples: &mut Vec<AdaptiveSample>,
+        budget: &mut u32,
+        engine: &OcrEngine,
+        video: &Path,
+        frames_dir: &Path,
+        cfg: &AdaptiveConfig,
+    ) {
+        if lo > hi { return; }
+        // OCR lo
+        let (lo_path, lo_raws) = match ocr_frame(lo, cache, budget, engine, video, frames_dir, cfg).await {
+            Some(r) => r,
+            None => return,
+        };
+        if lo_raws.is_empty() {
+            // lo has no readable text; advance
+            Box::pin(v3_recurse(lo + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            return;
+        }
+        // OCR hi
+        let (hi_path, hi_raws) = match ocr_frame(hi, cache, budget, engine, video, frames_dir, cfg).await {
+            Some(r) => r,
+            None => return,
+        };
+        if hi_raws.is_empty() {
+            Box::pin(v3_recurse(lo, hi - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            return;
+        }
+        // Single element
+        if lo == hi {
+            samples.push(AdaptiveSample {
+                frame: lo_path,
+                t_sec: lo as f32,
+                raws: lo_raws,
+            });
+            return;
+        }
+        // lo_text vs hi_text — compare "primary text" of each
+        // (use the first / highest-confidence detection)
+        let lo_text = lo_raws.iter()
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|d| d.text.clone())
+            .unwrap_or_default();
+        let hi_text = hi_raws.iter()
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|d| d.text.clone())
+            .unwrap_or_default();
+        // Exit: lo_text == hi_text → whole window is one segment
+        if lo_text == hi_text {
+            samples.push(AdaptiveSample {
+                frame: lo_path,
+                t_sec: lo as f32,
+                raws: lo_raws,
+            });
+            return;
+        }
+        // OCR mid
+        let mid = (lo + hi) / 2;
+        let (mid_path, mid_raws) = match ocr_frame(mid, cache, budget, engine, video, frames_dir, cfg).await {
+            Some(r) => r,
+            None => return,
+        };
+        if mid_raws.is_empty() {
+            // mid is empty; recurse both halves (skip the empty mid)
+            Box::pin(v3_recurse(lo, mid - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            Box::pin(v3_recurse(mid + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            return;
+        }
+        let mid_text = mid_raws.iter()
+            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|d| d.text.clone())
+            .unwrap_or_default();
+        // mid_text vs lo_text vs hi_text
+        if mid_text == lo_text {
+            // mid in left segment; right half independent
+            Box::pin(v3_recurse(lo, mid, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            Box::pin(v3_recurse(mid + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+        } else if mid_text == hi_text {
+            // mid in right segment; left half independent
+            Box::pin(v3_recurse(lo, mid - 1, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            Box::pin(v3_recurse(mid, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+        } else {
+            // mid is independent from both; recurse both halves
+            Box::pin(v3_recurse(lo, mid, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+            Box::pin(v3_recurse(mid + 1, hi, cache, samples, budget, engine, video, frames_dir, cfg)).await;
+        }
+        // The mid_path and mid_raws are recorded by the recursive calls
+        // (they will be re-OCR'd as part of the [lo, mid] or [mid+1, hi]
+        // range). We don't need to push mid as its own sample here
+        // because lo <= mid <= hi, and the recursive calls will
+        // cover it.
+        let _ = (mid_path, mid_raws);
+    }
+
+    v3_recurse(0, last_frame, &mut ocr_cache, &mut samples, &mut budget_remaining, engine, video, frames_dir, cfg).await;
 
     // ---- Sort by time ----
     samples.sort_by(|a, b| a.t_sec.partial_cmp(&b.t_sec).unwrap_or(std::cmp::Ordering::Equal));
