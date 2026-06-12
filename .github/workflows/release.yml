@@ -113,10 +113,15 @@ jobs:
 
       - name: Build release binary (default)
         if: matrix.features == ''
+        shell: bash
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build release binary (with ocr)
         if: matrix.features == 'ocr'
+        # Default Windows shell is PowerShell, which doesn't grok bash
+        # conditionals. Force bash so the PATH-prepend block below works
+        # on every platform.
+        shell: bash
         # macOS Homebrew's llvm is keg-only; prepend its bin dir to PATH so
         # bindgen can locate llvm-config during the build.
         run: |

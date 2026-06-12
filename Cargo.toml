@@ -1,6 +1,6 @@
 [package]
 name = "bilitools"
-version = "1.4.7-cli.5"
+version = "1.4.7-cli.6"
 edition = "2021"
 description = "A pure-Rust CLI port of BiliTools, the Bilibili toolbox. Reuses the original Rust business logic (login, aria2, ffmpeg, queue, storage) with the Tauri GUI layer stripped out."
 homepage = "https://github.com/nekobaimeow/bilitools-cli"
