@@ -205,7 +205,6 @@ pub enum Command {
     /// Use case: extract hard-coded text from screenshots, video title
     /// cards, on-screen watermarks, B-roll subtitles, etc. — text that
     /// B 站's own AI subtitle pipeline misses.
-    #[cfg(feature = "ocr")]
     Ocr {
         /// Image file path, or — with `--video` — a local video file.
         /// (B 站 BV/AV support requires you to download first; the error
@@ -255,6 +254,56 @@ pub enum Command {
         ///               thorough, more redundant.
         #[arg(long, value_enum, default_value_t = SampleMode::Adaptive)]
         sample_mode: SampleMode,
+    },
+
+    /// Full-content analysis — extract all text from a video in one shot.
+    /// Pulls audio + ASR transcript, danmaku, subtitles, reviews, and
+    /// optionally OCR. Outputs analysis.json + analysis.txt.
+    Analyze {
+        /// BV id, av id, or full URL.
+        input: String,
+        /// Output directory (default: ./analyze_output/<BV>-<slug>/).
+        #[arg(long, short = 'o')]
+        output_dir: Option<std::path::PathBuf>,
+        /// Skip audio download + ASR transcription.
+        #[arg(long)]
+        no_audio: bool,
+        /// Skip danmaku fetch.
+        #[arg(long)]
+        no_danmaku: bool,
+        /// Skip subtitle fetch.
+        #[arg(long)]
+        no_subtitle: bool,
+        /// Skip review/comment fetch.
+        #[arg(long)]
+        no_review: bool,
+        /// Enable OCR over video frames (requires `--video-path`).
+        #[arg(long)]
+        with_ocr: bool,
+        /// Language hint for ASR: auto | zh | yue | en | ja | ko.
+        #[arg(long, default_value = "auto")]
+        transcribe_language: String,
+        /// Inference device: cpu | cuda.
+        #[arg(long, default_value = "cpu")]
+        transcribe_device: String,
+        /// Keep emotion tags in transcript.
+        #[arg(long)]
+        transcribe_keep_tags: bool,
+        /// OCR frame interval in seconds.
+        #[arg(long, default_value = "1.0")]
+        ocr_interval: f32,
+        /// Max OCR frames (0 = unlimited).
+        #[arg(long, default_value = "0")]
+        ocr_max_frames: u32,
+        /// Minimum OCR confidence (0.0-1.0).
+        #[arg(long, default_value = "0.45")]
+        ocr_min_conf: f32,
+        /// OCR dedup window in seconds.
+        #[arg(long, default_value = "3.0")]
+        ocr_dedup_window: f32,
+        /// Local video file path for OCR (required with --with-ocr).
+        #[arg(long)]
+        video_path: Option<std::path::PathBuf>,
     },
 
     /// Cache management.

@@ -93,7 +93,7 @@ qrcode = { version = "0.14", default-features = false, features = ["image"] }
 # Image processing (small; jpeg required for OCR frame extraction)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
-# Optional — offline OCR via PaddleOCR + MNN (PP-OCRv5 mobile).
+# Offline OCR via PaddleOCR + MNN (PP-OCRv5 mobile). Always compiled in.
 # ocr-rs is a Rust wrapper around the MNN inference engine that runs
 # PaddleOCR models. We use it to extract hard-coded text from video
 # frames or images without any Python process.
@@ -102,10 +102,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # `TextBox` struct has a public `rect: imageproc::rect::Rect` field
 # whose methods we call. Cargo does not re-export transitive deps, so
 # we declare it explicitly.
-#
-# Build with: cargo build --release --features ocr
-ocr-rs = { version = "2.2.2", optional = true, default-features = false }
-imageproc = { version = "0.25", optional = true, default-features = false }
+ocr-rs = { version = "2.2.2", default-features = false }
+imageproc = { version = "0.25", default-features = false }
 
 # Misc
 once_cell = "1"
@@ -117,18 +115,6 @@ url = "2"
 # Finds `python3` and `sensevoice` executables on the user's PATH
 # for the built-in `audio --transcribe` ASR pipeline.
 which = "7"
-
-# Optional features — kept off by default to avoid bloat.
-# Each feature should NOT pull new runtime dependencies unless absolutely
-# required; the `transcribe` feature only toggles code paths that shell
-# out to an external Python CLI (sensevoice-skill).
-[features]
-default = []
-# Enable `bilitools ocr <path>` for offline OCR (PP-OCRv5 mobile via MNN).
-# Pulls in ocr-rs (MNN inference engine + PaddleOCR pipeline).
-# Models must be present at BILITOOLS_OCR_MODEL_DIR or ./models/ocr-fast/.
-# Build with: cargo build --release --features ocr
-ocr = ["dep:ocr-rs", "dep:imageproc"]
 
 [dev-dependencies]
 # Test utilities

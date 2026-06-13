@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! CLI subcommand implementations.
 
+pub mod analyze;
 pub mod auth;
 pub mod cache;
 pub mod config;
@@ -10,10 +11,7 @@ pub mod db;
 pub mod download;
 pub mod harvest;
 pub mod info;
-/// `bilitools ocr` — offline OCR (PP-OCRv5 mobile via MNN). Gated on
-/// the `ocr` cargo feature; with the feature off the module is present
-/// in source but its `run(...)` returns a friendly error.
-#[cfg(feature = "ocr")]
+/// `bilitools ocr` — offline OCR (PP-OCRv5 mobile via MNN).
 pub mod ocr;
 pub mod output;
 pub mod parse;
