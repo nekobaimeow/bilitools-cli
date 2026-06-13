@@ -185,7 +185,7 @@ pub async fn run(
     // Frame lookup: Phase 0 wrote `frames_dir/frame_NNNNN.jpg` with
     // N = idx + 1 (ffmpeg's image2 muxer is 1-indexed). We just read
     // the file — no ffmpeg spawn.
-    async fn ocr_frame(
+    fn ocr_frame(
         idx: i32,
         cache: &mut HashMap<i32, (PathBuf, Vec<RawDetection>)>,
         engine: &OcrEngine,
@@ -285,7 +285,7 @@ pub async fn run(
     let last_frame_idx = last_frame;
     let (lo_path, lo_raws, lo_cached) = match ocr_frame(
         0, &mut ocr_cache, engine, frames_dir, cfg,
-    ).await {
+    ) {
         Some(r) => r,
         None => return (samples, ocr_calls),
     };
@@ -295,7 +295,7 @@ pub async fn run(
     }
     let (hi_path, hi_raws, hi_cached) = match ocr_frame(
         last_frame_idx, &mut ocr_cache, engine, frames_dir, cfg,
-    ).await {
+    ) {
         Some(r) => r,
         None => return (samples, ocr_calls),
     };
@@ -333,13 +333,13 @@ pub async fn run(
             if lo_idx + 1 > hi_idx { continue; }
             let (new_hi_path, new_hi_raws, _) = match ocr_frame(
                 hi_idx, &mut ocr_cache, engine, frames_dir, cfg,
-            ).await {
+            ) {
                 Some(r) => r,
                 None => continue,
             };
             let (new_lo_path, new_lo_raws, _) = match ocr_frame(
                 lo_idx + 1, &mut ocr_cache, engine, frames_dir, cfg,
-            ).await {
+            ) {
                 Some(r) => r,
                 None => continue,
             };
@@ -358,13 +358,13 @@ pub async fn run(
             if lo_idx > hi_idx - 1 { continue; }
             let (new_lo_path, new_lo_raws, _) = match ocr_frame(
                 lo_idx, &mut ocr_cache, engine, frames_dir, cfg,
-            ).await {
+            ) {
                 Some(r) => r,
                 None => continue,
             };
             let (new_hi_path, new_hi_raws, _) = match ocr_frame(
                 hi_idx - 1, &mut ocr_cache, engine, frames_dir, cfg,
-            ).await {
+            ) {
                 Some(r) => r,
                 None => continue,
             };
@@ -429,7 +429,7 @@ pub async fn run(
         }
         let (mid_path, mid_raws, mid_cached) = match ocr_frame(
             mid_idx, &mut ocr_cache, engine, frames_dir, cfg,
-        ).await {
+        ) {
             Some(r) => r,
             None => {
                 tracing::warn!("v3 ocr_frame({}) failed; skipping mid", mid_idx);
@@ -437,7 +437,7 @@ pub async fn run(
                 if lo_idx <= mid_idx - 1 {
                     let (new_hi_path, new_hi_raws, _) = match ocr_frame(
                         mid_idx - 1, &mut ocr_cache, engine, frames_dir, cfg,
-                    ).await {
+                    ) {
                         Some(r) => r,
                         None => continue,
                     };
@@ -449,7 +449,7 @@ pub async fn run(
                 if mid_idx + 1 <= hi_idx {
                     let (new_lo_path, new_lo_raws, _) = match ocr_frame(
                         mid_idx + 1, &mut ocr_cache, engine, frames_dir, cfg,
-                    ).await {
+                    ) {
                         Some(r) => r,
                         None => continue,
                     };
@@ -473,7 +473,7 @@ pub async fn run(
             if lo_idx <= mid_idx - 1 {
                 let (new_hi_path, new_hi_raws, _) = match ocr_frame(
                     mid_idx - 1, &mut ocr_cache, engine, frames_dir, cfg,
-                ).await {
+                ) {
                     Some(r) => r,
                     None => continue,
                 };
@@ -485,7 +485,7 @@ pub async fn run(
             if mid_idx + 1 <= hi_idx {
                 let (new_lo_path, new_lo_raws, _) = match ocr_frame(
                     mid_idx + 1, &mut ocr_cache, engine, frames_dir, cfg,
-                ).await {
+                ) {
                     Some(r) => r,
                     None => continue,
                 };
@@ -513,7 +513,7 @@ pub async fn run(
             if mid_idx + 1 <= hi_idx {
                 let (new_lo_path, new_lo_raws, _) = match ocr_frame(
                     mid_idx + 1, &mut ocr_cache, engine, frames_dir, cfg,
-                ).await {
+                ) {
                     Some(r) => r,
                     None => continue,
                 };
@@ -529,7 +529,7 @@ pub async fn run(
             if lo_idx <= mid_idx - 1 {
                 let (new_hi_path, new_hi_raws, _) = match ocr_frame(
                     mid_idx - 1, &mut ocr_cache, engine, frames_dir, cfg,
-                ).await {
+                ) {
                     Some(r) => r,
                     None => continue,
                 };
@@ -558,7 +558,7 @@ pub async fn run(
             if lo_idx <= mid_idx - 1 {
                 let (new_hi_path, new_hi_raws, _) = match ocr_frame(
                     mid_idx - 1, &mut ocr_cache, engine, frames_dir, cfg,
-                ).await {
+                ) {
                     Some(r) => r,
                     None => continue,
                 };
@@ -570,7 +570,7 @@ pub async fn run(
             if mid_idx + 1 <= hi_idx {
                 let (new_lo_path, new_lo_raws, _) = match ocr_frame(
                     mid_idx + 1, &mut ocr_cache, engine, frames_dir, cfg,
-                ).await {
+                ) {
                     Some(r) => r,
                     None => continue,
                 };
