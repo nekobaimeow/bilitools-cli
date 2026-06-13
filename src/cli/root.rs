@@ -317,6 +317,9 @@ pub enum Command {
     /// Run a health check (auto-aria2, ffmpeg, DanmakuFactory, B 站).
     Doctor,
 
+    /// One-shot environment setup for analyze (python3, sensevoice, funasr, OCR models).
+    Setup,
+
     /// Start an interactive REPL.
     Repl,
 }

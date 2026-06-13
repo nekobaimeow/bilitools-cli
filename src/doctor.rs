@@ -52,6 +52,18 @@ pub async fn run() -> Result<DoctorReport, CliError> {
     // 5. B 站 reachable
     checks.push(check_bilibili_reachable().await);
 
+    // 6. python3 (for ASR)
+    checks.push(check_python3());
+
+    // 7. sensevoice CLI (for ASR)
+    checks.push(check_sensevoice());
+
+    // 8. funasr Python package (for ASR)
+    checks.push(check_funasr().await);
+
+    // 9. OCR models
+    checks.push(check_ocr_models());
+
     let ok = checks.iter().all(|c| c.ok || c.name == "danmaku_factory"); // DanmakuFactory is optional
     Ok(DoctorReport { ok, checks })
 }
@@ -124,6 +136,111 @@ async fn check_bilibili_reachable() -> CheckResult {
             detail: format!("{e}"),
             hint: Some("check your internet connection or proxy settings".into()),
         },
+    }
+}
+
+fn check_python3() -> CheckResult {
+    match which::which("python3") {
+        Ok(p) => CheckResult {
+            name: "python3".into(),
+            ok: true,
+            detail: format!("found at {}", p.display()),
+            hint: None,
+        },
+        Err(_) => CheckResult {
+            name: "python3".into(),
+            ok: false,
+            detail: "not found in PATH".into(),
+            hint: Some("install: sudo apt install python3  (or brew install python3)".into()),
+        },
+    }
+}
+
+fn check_sensevoice() -> CheckResult {
+    match which::which("sensevoice") {
+        Ok(p) => CheckResult {
+            name: "sensevoice".into(),
+            ok: true,
+            detail: format!("found at {}", p.display()),
+            hint: None,
+        },
+        Err(_) => CheckResult {
+            name: "sensevoice".into(),
+            ok: false,
+            detail: "not found in PATH".into(),
+            hint: Some(
+                "install:\n  git clone https://github.com/nekobaimeow/sensevoice-skill.git\n  cd sensevoice-skill && chmod +x sensevoice\n  ln -s $(pwd)/sensevoice ~/.local/bin/sensevoice"
+                    .into(),
+            ),
+        },
+    }
+}
+
+async fn check_funasr() -> CheckResult {
+    let python = match which::which("python3") {
+        Ok(p) => p,
+        Err(_) => {
+            return CheckResult {
+                name: "funasr".into(),
+                ok: false,
+                detail: "python3 not found (required for funasr)".into(),
+                hint: Some("install python3 first".into()),
+            }
+        }
+    };
+    match tokio::process::Command::new(&python)
+        .args(["-c", "import funasr"])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => CheckResult {
+            name: "funasr".into(),
+            ok: true,
+            detail: "funasr Python package available".into(),
+            hint: None,
+        },
+        _ => CheckResult {
+            name: "funasr".into(),
+            ok: false,
+            detail: "funasr not installed for python3".into(),
+            hint: Some("pip install funasr numpy soundfile".into()),
+        },
+    }
+}
+
+fn check_ocr_models() -> CheckResult {
+    // Check the bundled models/ocr-fast/ directory (relative to the binary,
+    // or from env BILITOOLS_OCR_MODEL_DIR). At package time we ship
+    // PP-OCRv5_mobile_det_fp16.mnn + PP-OCRv5_mobile_rec_fp16.mnn + ppocr_keys_v5.txt.
+    let candidates = [
+        std::env::var("BILITOOLS_OCR_MODEL_DIR").ok().map(std::path::PathBuf::from),
+        std::env::current_dir().ok().map(|d| d.join("models/ocr-fast")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.join("models/ocr-fast"))),
+    ];
+    for maybe_dir in candidates.iter().flatten() {
+        let det = maybe_dir.join("PP-OCRv5_mobile_det_fp16.mnn");
+        let rec = maybe_dir.join("PP-OCRv5_mobile_rec_fp16.mnn");
+        let keys = maybe_dir.join("ppocr_keys_v5.txt");
+        if det.is_file() && rec.is_file() && keys.is_file() {
+            return CheckResult {
+                name: "ocr_models".into(),
+                ok: true,
+                detail: format!("found at {}", maybe_dir.display()),
+                hint: None,
+            };
+        }
+    }
+    CheckResult {
+        name: "ocr_models".into(),
+        ok: false,
+        detail: "PP-OCRv5 MNN models not found".into(),
+        hint: Some(
+            "set BILITOOLS_OCR_MODEL_DIR=/path/to/models/ocr-fast\n  \
+             Models (det/rec fp16 MNN + keys) are bundled in the crate release archive."
+                .into(),
+        ),
     }
 }
 

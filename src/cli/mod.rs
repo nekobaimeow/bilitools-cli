@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! CLI subcommand implementations.
 
+pub mod setup;
 pub mod analyze;
 pub mod auth;
 pub mod cache;
