@@ -91,7 +91,6 @@ pub async fn run(cmd: &Command, out: &Output) -> Result<(), CliError> {
     Ok(())
 }
 
-#[cfg(feature = "transcribe")]
 async fn run_transcribe(
     audio: &audio::AudioResult,
     out: &Output,
@@ -166,24 +165,6 @@ async fn run_transcribe(
         }
     }
     Ok(())
-}
-
-#[cfg(not(feature = "transcribe"))]
-async fn run_transcribe(
-    _audio: &audio::AudioResult,
-    _out: &Output,
-    _language: &str,
-    _device: &str,
-    _keep_tags: bool,
-    _sensevoice_cli: Option<&std::path::Path>,
-) -> Result<(), CliError> {
-    Err(CliError::MissingDependency(
-        "bilitools was built without the `transcribe` feature.\n\
-         Recompile with: cargo install --path . --features transcribe\n\
-         (or: cargo build --release --features transcribe)\n\
-         and install sensevoice from https://github.com/nekobaimeow/sensevoice-skill"
-            .to_string(),
-    ))
 }
 
 #[cfg(test)]

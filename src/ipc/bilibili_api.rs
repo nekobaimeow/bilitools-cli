@@ -25,6 +25,8 @@ pub struct ResourceDescription {
     pub children: Vec<ResourceDescription>,
     /// Raw upstream JSON, for callers that need more.
     pub raw: serde_json::Value,
+    /// Video description (B 站简介). `None` when unavailable.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +52,7 @@ struct ViewData {
     pages: Option<Vec<ViewPage>>,
     aid: Option<i64>,
     bvid: Option<String>,
+    desc: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -154,6 +157,7 @@ async fn describe_video(id: &str) -> Result<ResourceDescription, CliError> {
         pages,
         aid: data.aid,
         children: Vec::new(),
+        description: data.desc,
         raw,
     })
 }
@@ -188,6 +192,7 @@ async fn describe_season(id: &str) -> Result<ResourceDescription, CliError> {
             aid: None,
 
             children: Vec::new(),
+            description: None,
             raw: serde_json::Value::Null,
         })
         .collect();
@@ -200,6 +205,7 @@ async fn describe_season(id: &str) -> Result<ResourceDescription, CliError> {
         pages: Vec::new(),
         aid: None,
         children,
+        description: None,
         raw: serde_json::Value::Null,
     })
 }
@@ -250,6 +256,7 @@ async fn describe_favorite(fid: &str) -> Result<ResourceDescription, CliError> {
         aid: None,
 
         children: Vec::new(),
+        description: None,
         raw: body,
     })
 }
@@ -274,6 +281,7 @@ async fn describe_watch_later() -> Result<ResourceDescription, CliError> {
         aid: None,
 
         children: Vec::new(),
+        description: None,
         raw: body,
     })
 }
@@ -305,6 +313,7 @@ async fn describe_user(mid: &str) -> Result<ResourceDescription, CliError> {
         aid: None,
 
         children: Vec::new(),
+        description: None,
         raw: body,
     })
 }
@@ -336,6 +345,7 @@ async fn describe_audio(auid: &str) -> Result<ResourceDescription, CliError> {
         aid: None,
 
         children: Vec::new(),
+        description: None,
         raw: body,
     })
 }
@@ -361,6 +371,7 @@ async fn describe_collection(lid: &str) -> Result<ResourceDescription, CliError>
         aid: None,
 
         children: Vec::new(),
+        description: None,
         raw: body,
     })
 }
@@ -393,6 +404,7 @@ mod tests {
             pages: vec![],
             aid: None,
             children: vec![],
+            description: None,
             raw: serde_json::Value::Null,
         };
         assert_eq!(d.kind, ResourceKind::Video);

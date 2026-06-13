@@ -114,9 +114,9 @@ parking_lot = "0.12"
 bytes = "1"
 url = "2"
 
-# Optional — only used by the `transcribe` feature for finding
-# the `python3` and `sensevoice` executables on the user's PATH.
-which = { version = "7", optional = true }
+# Finds `python3` and `sensevoice` executables on the user's PATH
+# for the built-in `audio --transcribe` ASR pipeline.
+which = "7"
 
 # Optional features — kept off by default to avoid bloat.
 # Each feature should NOT pull new runtime dependencies unless absolutely
@@ -124,10 +124,6 @@ which = { version = "7", optional = true }
 # out to an external Python CLI (sensevoice-skill).
 [features]
 default = []
-# Enable `bilitools audio <bv> --transcribe` to transcribe downloaded
-# audio via the external `sensevoice` CLI (https://github.com/nekobaimeow/sensevoice-skill).
-# Build with: cargo build --release --features transcribe
-transcribe = ["dep:which"]
 # Enable `bilitools ocr <path>` for offline OCR (PP-OCRv5 mobile via MNN).
 # Pulls in ocr-rs (MNN inference engine + PaddleOCR pipeline).
 # Models must be present at BILITOOLS_OCR_MODEL_DIR or ./models/ocr-fast/.

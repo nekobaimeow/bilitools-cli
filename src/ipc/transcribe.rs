@@ -109,26 +109,13 @@ pub struct TranscribeResult {
     pub audio_duration_sec: Option<f32>,
 }
 
-/// Public entry point. Always present so callers don't need cfg gates.
+/// Public entry point. Always available — sensevoice is a runtime dependency.
 pub async fn transcribe(opts: &TranscribeOpts) -> Result<TranscribeResult> {
-    #[cfg(feature = "transcribe")]
-    {
-        transcribe_impl(opts).await
-    }
-    #[cfg(not(feature = "transcribe"))]
-    {
-        let _ = opts;
-        Err(CliError::MissingDependency(
-            "transcribe feature disabled at build time — \
-             rebuild with `cargo build --release --features transcribe`"
-                .to_string(),
-        ))
-    }
+    transcribe_impl(opts).await
 }
 
-// ---------- Real implementation (feature-gated) ----------
+// ---------- Implementation ----------
 
-#[cfg(feature = "transcribe")]
 async fn transcribe_impl(opts: &TranscribeOpts) -> Result<TranscribeResult> {
     use std::process::Stdio;
 
@@ -301,7 +288,6 @@ async fn transcribe_impl(opts: &TranscribeOpts) -> Result<TranscribeResult> {
 }
 
 /// Locate an executable: explicit path > `which` lookup. With actionable error.
-#[cfg(feature = "transcribe")]
 fn resolve_exe(
     explicit: Option<&Path>,
     name: &str,

@@ -178,29 +178,24 @@ pub enum Command {
         #[arg(long, short = 'q', default_value = "80")]
         quality: u32,
         /// Run local ASR after download using the external `sensevoice` CLI
-        /// (https://github.com/nekobaimeow/sensevoice-skill). Requires
-        /// building with `--features transcribe` AND `sensevoice` on PATH.
+        /// (https://github.com/nekobaimeow/sensevoice-skill).
+        /// Requires `sensevoice` on PATH.
         /// First run downloads ~900 MB SenseVoiceSmall model from ModelScope.
-        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
         #[arg(long)]
         transcribe: bool,
         /// Language hint for ASR: auto | zh | yue | en | ja | ko.
         /// "auto" (default) lets the SenseVoiceSmall model detect per segment —
         /// recommended for B 站 content that mixes Chinese narration with
         /// English terms (model names, acronyms, etc.).
-        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
         #[arg(long, default_value = "auto")]
         transcribe_language: String,
         /// Inference device: cpu | cuda (default cpu).
-        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
         #[arg(long, default_value = "cpu")]
         transcribe_device: String,
         /// Keep emotion tags (<|HAPPY|> etc.) in the transcript.
-        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
         #[arg(long)]
         transcribe_keep_tags: bool,
         /// Override path to the `sensevoice` script (default: which sensevoice).
-        #[cfg_attr(not(feature = "transcribe"), arg(hide = true))]
         #[arg(long)]
         sensevoice_cli: Option<std::path::PathBuf>,
     },
