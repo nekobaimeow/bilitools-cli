@@ -411,14 +411,20 @@ pub async fn fetch(
     tracing::debug!("playurl url = {url}");
 
     let client = init_client().await?;
-    let resp = client.get(&url).send().await?;
+    let resp = client
+        .get(&url)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await?;
     if !resp.status().is_success() {
         return Err(CliError::http(
             resp.status().as_u16(),
             String::from("playurl api failed"),
         ));
     }
-    let body: serde_json::Value = resp.json().await?;
+    let body_bytes = resp.bytes().await.map_err(CliError::from)?;
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| CliError::msg(format!("playurl json: {e}")))?;
     if body.get("code").and_then(|c| c.as_i64()) != Some(0) {
         let code = body.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
         let msg = body
