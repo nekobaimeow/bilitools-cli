@@ -109,6 +109,7 @@ pub async fn run(cmd: &Command, out: &Output) -> Result<()> {
         no_danmaku,
         no_subtitle,
         no_review,
+        review_pages,
         no_ocr,
         transcribe_language,
         transcribe_device,
@@ -172,7 +173,7 @@ pub async fn run(cmd: &Command, out: &Output) -> Result<()> {
     let review_fut = if *no_review {
         None
     } else {
-        Some(run_review(input))
+        Some(run_review(input, *review_pages))
     };
 
     let (audio_res, danmaku_res, sub_res, rev_res) = tokio::join!(
@@ -503,10 +504,17 @@ async fn extract_subtitle_text(path: &Path) -> Vec<String> {
         .collect()
 }
 
-async fn run_review(input: &str) -> Result<ReviewSection> {
-    let result = review::fetch_main(input, ReviewSort::Hot, 1, 20).await?;
-    let text_lines: Vec<String> = result
-        .replies
+async fn run_review(input: &str, pages: u32) -> Result<ReviewSection> {
+    let mut all_replies: Vec<review::Reply> = Vec::new();
+    let mut total: i64 = 0;
+
+    for page in 1..=pages {
+        let result = review::fetch_main(input, ReviewSort::Hot, page, 20).await?;
+        total = result.total;
+        all_replies.extend(result.replies);
+    }
+
+    let text_lines: Vec<String> = all_replies
         .iter()
         .map(|r| {
             let top = if r.is_top { "[置顶] " } else { "" };
@@ -515,8 +523,8 @@ async fn run_review(input: &str) -> Result<ReviewSection> {
         .collect();
 
     Ok(ReviewSection {
-        total: result.total,
-        loaded: result.replies.len(),
+        total,
+        loaded: all_replies.len(),
         text_lines,
     })
 }
@@ -614,40 +622,53 @@ async fn run_ocr_impl(
     Ok(json)
 }
 
-/// Download video for OCR using bilix (or bilicli download queue as fallback).
+/// Download video for OCR using bilicli's own download queue.
 async fn download_video_for_ocr(
     input: &str,
     work_dir: &Path,
     out: &Output,
 ) -> Result<PathBuf> {
-    // Try bilix first — fastest for B站
-    let bilix = which::which("bilix")
-        .or_else(|_| which::which("bilix.exe"))
-        .ok();
-    if let Some(bilix_bin) = bilix {
-        out.status("[analyze/ocr] downloading video via bilix...");
-        let bv = crate::ipc::danmaku::extract_bvid(input).unwrap_or_else(|| input.to_string());
-        let output = tokio::process::Command::new(&bilix_bin)
-            .args(["get_video", &format!("BV{bv}"), "-d"])
-            .arg(work_dir)
-            .output()
-            .await
-            .map_err(|e| CliError::msg(format!("bilix spawn: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Don't fail — fall through to internal download
-        } else {
-            // bilix creates a subdirectory, find the mp4
-            if let Some(mp4) = find_mp4_in_dir(work_dir).await {
-                out.status(&format!("[analyze/ocr] downloaded: {}", mp4.display()));
-                return Ok(mp4);
-            }
+    use crate::ipc::queue;
+    use crate::ipc::storage::tasks::{self, Task, TaskStatus, TaskType};
+
+    out.status("[analyze/ocr] downloading video via bilicli...");
+
+    let bv = crate::ipc::danmaku::extract_bvid(input).unwrap_or_else(|| input.to_string());
+
+    // Submit a download task
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let task = Task {
+        id: task_id.clone(),
+        task_type: TaskType::Video,
+        source: format!("https://www.bilibili.com/video/BV{bv}"),
+        options: serde_json::json!({
+            "id": format!("BV{bv}"),
+            "kind": "video",
+            "output_dir": work_dir,
+        }),
+        status: TaskStatus::Pending,
+        progress: 0.0,
+        error: None,
+        created_at: crate::ipc::shared::get_sec(),
+        updated_at: crate::ipc::shared::get_sec(),
+        completed_at: None,
+    };
+    tasks::insert(&task).await?;
+
+    // Run the task
+    let result = queue::run_task(&task_id).await?;
+
+    // Find mp4 output
+    if let Some(output) = &result.output {
+        if output.exists() {
+            out.status(&format!("[analyze/ocr] downloaded: {}", output.display()));
+            return Ok(output.clone());
         }
     }
-
-    // Fallback: use bilicli's playurl + direct DASH download
-    out.status("[analyze/ocr] downloading video (DASH)...");
-    dash_download_video(input, work_dir).await
+    if let Some(mp4) = find_mp4_in_dir(work_dir).await {
+        return Ok(mp4);
+    }
+    Err(CliError::msg("download finished but mp4 not found"))
 }
 
 /// Find an .mp4 file recursively under `dir`.

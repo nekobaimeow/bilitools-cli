@@ -287,6 +287,9 @@ pub enum Command {
         /// Skip review/comment fetch.
         #[arg(long)]
         no_review: bool,
+        /// Number of review pages to fetch (20 per page, default 1).
+        #[arg(long, default_value = "1")]
+        review_pages: u32,
         /// Skip OCR over video frames. By default, OCR runs on the downloaded video.
         #[arg(long)]
         no_ocr: bool,
