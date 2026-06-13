@@ -171,7 +171,7 @@ COMMANDS:
 
 ```rust
 pub struct AppContext {
-    pub data_dir: PathBuf,        // XDG_DATA_HOME/com.btjawa.bilicli
+    pub data_dir: PathBuf,        // XDG_DATA_HOME/com.nekobaimeow.bilicli
     pub log_dir: PathBuf,
     pub temp_dir: PathBuf,
     pub config_path: PathBuf,
@@ -188,7 +188,7 @@ pub struct AppContext {
 沿用 BiliTools 全部 schema：
 - `cookies`, `tasks`, `queue`, `schedulers`, `settings`（JSON blob）
 
-CLI 数据库路径与 GUI 一致（Linux: `$XDG_DATA_HOME/com.btjawa.bilicli/Storage/storage.db`），支持**与 GUI 版数据互通**。
+CLI 数据库路径与 GUI 一致（Linux: `$XDG_DATA_HOME/com.nekobaimeow.bilicli/Storage/storage.db`），支持**与 GUI 版数据互通**。
 
 ### 4.3 跨进程
 

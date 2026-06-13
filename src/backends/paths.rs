@@ -2,16 +2,15 @@
 // Path utilities — replacement for `tauri::Manager::path`.
 //
 // The CLI uses XDG / standard OS paths to remain GUI-tooling-free.
-// Data dir is intentionally kept at `com.btjawa.bilicli` to be
-// interoperable with the GUI BiliTools version (cookies, tasks, settings
-// are read/written from the same SQLite db).
+// Data dir uses our own namespace to avoid conflicts
+// with the upstream BiliTools GUI.
 
 use crate::error::CliError;
 use directories::ProjectDirs;
 use std::path::{Path, PathBuf};
 
 const QUALIFIER: &str = "com";
-const ORG: &str = "btjawa";
+const ORG: &str = "nekobaimeow";
 const APP: &str = "bilicli";
 
 /// Wrapper around `directories::ProjectDirs` so we can override data dir
@@ -44,9 +43,9 @@ impl Paths {
         })
     }
 
-    /// `XDG_DATA_HOME/com.btjawa.bilicli` (Linux)
-    /// `~/Library/Application Support/com.btjawa.bilicli` (macOS)
-    /// `%AppData%\com.btjawa.bilicli` (Windows)
+    /// `XDG_DATA_HOME/com.nekobaimeow.bilicli` (Linux)
+    /// `~/Library/Application Support/com.nekobaimeow.bilicli` (macOS)
+    /// `%AppData%\com.nekobaimeow.bilicli` (Windows)
     pub fn data_dir(&self) -> PathBuf {
         if let Some(ref p) = self.override_data {
             return p.clone();
@@ -64,7 +63,7 @@ impl Paths {
         self.storage_dir().join("storage.db")
     }
 
-    /// `XDG_CONFIG_HOME/com.btjawa.bilicli` (CLI-only config file, separate from DB)
+    /// `XDG_CONFIG_HOME/com.nekobaimeow.bilicli` (CLI-only config file, separate from DB)
     pub fn config_dir(&self) -> PathBuf {
         self.project.config_dir().to_path_buf()
     }
@@ -75,17 +74,17 @@ impl Paths {
         self.config_dir().join("bilicli.toml")
     }
 
-    /// `XDG_DATA_HOME/com.btjawa.bilicli/logs/`
+    /// `XDG_DATA_HOME/com.nekobaimeow.bilicli/logs/`
     pub fn log_dir(&self) -> PathBuf {
         self.data_dir().join("logs")
     }
 
-    /// `XDG_CACHE_HOME/com.btjawa.bilicli/`
+    /// `XDG_CACHE_HOME/com.nekobaimeow.bilicli/`
     pub fn cache_dir(&self) -> PathBuf {
         self.project.cache_dir().to_path_buf()
     }
 
-    /// `XDG_RUNTIME_DIR/com.btjawa.bilicli/` — Aria2 RPC secret/socket go here.
+    /// `XDG_RUNTIME_DIR/com.nekobaimeow.bilicli/` — Aria2 RPC secret/socket go here.
     pub fn runtime_dir(&self) -> PathBuf {
         if let Some(runtime) = directories::UserDirs::new().and_then(|_| {
             std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)

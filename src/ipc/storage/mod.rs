@@ -3,7 +3,7 @@
 //!
 //! The CLI uses the same SQLite schema as the GUI version so both
 //! can read and write the same database file at
-//! `$XDG_DATA_HOME/com.btjawa.bilicli/Storage/storage.db`.
+//! `$XDG_DATA_HOME/com.nekobaimeow.bilicli/Storage/storage.db`.
 
 pub mod config;
 pub mod cookies;

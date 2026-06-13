@@ -77,7 +77,7 @@ bilicli doctor   # checks aria2c + ffmpeg + DanmakuFactory + B 站 API
 ## Authentication
 
 Most endpoints work **better** when logged in. Login state lives in the SQLite database at
-`$XDG_DATA_HOME/com.btjawa.bilicli/Storage/storage.db` (or `BILICLI_DATA_DIR/Storage/`).
+`$XDG_DATA_HOME/com.nekobaimeow.bilicli/Storage/storage.db` (or `BILICLI_DATA_DIR/Storage/`).
 
 ```bash
 # 1. Generate a QR code PNG
@@ -750,7 +750,7 @@ override with `BILICLI_OCR_THREADS`.
 
 | What | Path |
 |------|------|
-| SQLite (cookies, tasks, settings) | `$XDG_DATA_HOME/com.btjawa.bilicli/Storage/storage.db` |
+| SQLite (cookies, tasks, settings) | `$XDG_DATA_HOME/com.nekobaimeow.bilicli/Storage/storage.db` |
 | Override | `BILICLI_DATA_DIR=/tmp/foo` |
 | Config TOML | `<data_dir>/config.toml` |
 | Cookies (within DB) | `SELECT name, value FROM cookies WHERE name='SESSDATA'` |

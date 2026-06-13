@@ -85,9 +85,9 @@ bilicli harvest --search "原神 演示" --limit 50
 ### 📁 数据目录
 
 ```
-Linux:   $XDG_DATA_HOME/com.btjawa.bilicli/
-macOS:   ~/Library/Application Support/com.btjawa.bilicli/
-Windows: %AppData%\com.btjawa.bilicli\
+Linux:   $XDG_DATA_HOME/com.nekobaimeow.bilicli/
+macOS:   ~/Library/Application Support/com.nekobaimeow.bilicli/
+Windows: %AppData%\com.nekobaimeow.bilicli\
 ```
 
 ### 📝 致谢

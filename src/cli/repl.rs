@@ -131,6 +131,6 @@ fn shell_split(line: &str) -> Vec<String> {
 }
 
 fn dirs_history_path() -> Option<std::path::PathBuf> {
-    let base = directories::ProjectDirs::from("com", "btjawa", "bilicli")?;
+    let base = directories::ProjectDirs::from("com", "nekobaimeow", "bilicli")?;
     Some(base.data_dir().join("repl_history"))
 }

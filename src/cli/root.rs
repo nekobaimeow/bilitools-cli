@@ -22,7 +22,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub config: Option<std::path::PathBuf>,
 
-    /// Override the data directory (defaults to XDG_DATA_HOME/com.btjawa.bilicli).
+    /// Override the data directory (defaults to XDG_DATA_HOME/com.nekobaimeow.bilicli).
     #[arg(long, global = true)]
     pub data_dir: Option<std::path::PathBuf>,
 
